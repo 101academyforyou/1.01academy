@@ -89,6 +89,7 @@ async function initFirebase() {
   fb = { ...a, ...f };
   const firebaseApp = app.initializeApp(CONFIG.firebaseConfig);
   auth = a.getAuth(firebaseApp);
+  auth.languageCode = 'zh-TW'; // 驗證信、重設密碼信使用繁體中文
   db = f.getFirestore(firebaseApp);
   return new Promise((resolve) => {
     a.onAuthStateChanged(auth, async (u) => {
@@ -263,7 +264,7 @@ pages.login = (app, _, query) => {
       const email = f.email.value.trim();
       if (!email) return toast('請先在上方輸入你的 Email');
       try { await fb.sendPasswordResetEmail(auth, email); } catch (e) { /* 不透露帳號是否存在 */ }
-      toast('若此 Email 已註冊，重設密碼信已寄出');
+      toast('若此 Email 已註冊，重設密碼信已寄出（請一併檢查垃圾郵件）');
     };
     f.onsubmit = async (e) => {
       e.preventDefault();
@@ -297,6 +298,7 @@ pages.verify = (app) => {
   if (isVerified()) return go('/my');
   app.innerHTML = '<div class="container narrow"><h1>請驗證你的 Email</h1><div class="card pad">' +
     `<p>我們已寄送驗證信到 <strong>${esc(user.email)}</strong>，請點信中的連結完成驗證，再回到這裡。</p>` +
+    '<div class="notice">📬 沒收到信嗎？請檢查<strong>垃圾郵件</strong>或<strong>促銷內容</strong>資料夾。寄件者通常是 noreply@…firebaseapp.com，找到後可標記為「不是垃圾郵件」。</div>' +
     '<button class="btn btn-block" id="check">我已完成驗證</button>' +
     '<p class="center small"><button class="link" id="resend">重新寄送驗證信</button></p></div></div>';
   app.querySelector('#check').onclick = async () => {
@@ -310,7 +312,7 @@ pages.verify = (app) => {
     go('/my');
   };
   app.querySelector('#resend').onclick = async () => {
-    try { await fb.sendEmailVerification(user); toast('驗證信已重新寄出'); } catch (e) { toast(authError(e)); }
+    try { await fb.sendEmailVerification(user); toast('驗證信已重新寄出，請一併檢查垃圾郵件'); } catch (e) { toast(authError(e)); }
   };
 };
 
