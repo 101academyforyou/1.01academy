@@ -190,7 +190,7 @@ function renderHeader() {
   const name = user ? (user.displayName || user.email) : '';
   document.getElementById('header').innerHTML =
     '<div class="container nav">' +
-    '<a href="#/" class="logo"><span class="logo-mark">1.01</span>1.01 Academy</a>' +
+    '<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"></span>1.01 Academy</a>' +
     '<nav>' +
     '<a href="#/">所有課程</a>' +
     (user
