@@ -241,7 +241,7 @@ pages.home = (app) => {
       (!q || (c.title + c.subtitle + c.instructor).toLowerCase().includes(q)));
     app.querySelector('#list').innerHTML = list.length ? list.map((c) =>
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
-      `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
+      `<span class="tag">${[c.category, c.level].filter(Boolean).map(esc).join(" · ")}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
       `<div>${isVerified() && granted(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
