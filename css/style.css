@@ -183,3 +183,8 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .student { margin-bottom: 12px; }
 .student .check { margin: 8px 0; }
 .search-small { max-width: 240px; margin-top: 0; }
+
+/* 限時免費 */
+.free-until { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: #dc2626; }
+.free-window { border: 1px dashed var(--border); border-radius: 10px; padding: 12px 14px 2px; margin: 4px 0 14px; }
+.free-window p { margin: 4px 0 10px; }
