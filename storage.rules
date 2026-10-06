@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// 1.01 Academy — Firebase Storage 安全規則
+// 貼到 Firebase 主控台 → Storage → 規則 → 發布
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // 管理者名單（與 firestore.rules 相同）
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in ['salimachchang@gmail.com'];
+    }
+
+    // videos/{課程id}/{檔名}：課程影片
+    // 只有管理者能上傳、刪除；影片檔需小於 2GB
+    // 學生透過存在 courseVideos（受 Firestore 規則保護）裡的下載連結觀看
+    match /videos/{courseId}/{file} {
+      allow read: if isAdmin();
+      allow delete: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.size < 2 * 1024 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
+    }
+
+    // 其他路徑一律禁止
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

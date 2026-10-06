@@ -77,7 +77,23 @@ function youtubeId(v) {
 // 已跳脫的文字中，把網址變成可點擊的連結
 const linkify = (html) => html.replace(/https?:\/\/[^\s<]+/g, (u) => `<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`);
 
+// Bunny Stream：接受後台的 play 或 embed 網址，回傳 [播放網域, 影片庫 ID, 影片 ID]
+function bunnyIds(v) {
+  const m = /^https:\/\/((?:iframe|player)\.mediadelivery\.net)\/(?:embed|play)\/(\d+)\/([0-9a-f-]{36})/i.exec(String(v || '').trim());
+  return m ? [m[1].toLowerCase(), m[2], m[3]] : null;
+}
+
+// 上傳到 Firebase Storage 的影片（或其他 https 影片檔網址）
+const isFileVideo = (v) => /^https:\/\//.test(String(v || '').trim()) && !youtubeId(v) && !bunnyIds(v);
+
 function youtubeEmbed(v) {
+  const bunny = bunnyIds(v);
+  if (bunny) {
+    return `<div class="video"><iframe src="https://${bunny[0]}/embed/${bunny[1]}/${bunny[2]}?autoplay=false&preload=true&responsive=true" title="課程影片" loading="lazy" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
+  }
+  if (isFileVideo(v)) {
+    return `<div class="video"><video src="${esc(v)}" controls playsinline preload="metadata" controlsList="nodownload" disablePictureInPicture oncontextmenu="return false"></video></div>`;
+  }
   const id = youtubeId(v);
   return id
     ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1" title="課程影片" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`
@@ -666,7 +682,9 @@ pages.edit = async (app, id) => {
           (li < ch.lessons.length - 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="down" data-ci="${ci}" data-li="${li}">↓</button>` : '') +
           `<button type="button" class="btn btn-ghost btn-sm" data-act="del-l" data-ci="${ci}" data-li="${li}">刪除</button></span></div>` +
           `<label>單元標題<input class="input" data-l="title" data-ci="${ci}" data-li="${li}" value="${esc(l.title)}"/></label>` +
-          `<label>YouTube 影片網址<input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>影片 <span class="muted small">貼上 Bunny Stream 或 YouTube 網址，或按「上傳影片檔」</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://iframe.mediadelivery.net/play/…"/></label>` +
+          `<div class="upload-row"><label class="btn btn-ghost btn-sm">📤 上傳影片檔<input type="file" accept="video/*" data-upload="${esc(l.id)}" data-ci="${ci}" data-li="${li}" hidden/></label>` +
+          `<span class="muted small" data-prog="${esc(l.id)}">${uploads[l.id] != null ? `上傳中 ${uploads[l.id]}%` : isFileVideo(videos[l.id]) ? '✓ 使用已上傳的影片檔' : ''}</span></div>` +
           `<label>單元說明 <span class="muted small">顯示在影片下方，網址會變成連結</span><textarea class="input textarea" rows="3" data-l="note" data-ci="${ci}" data-li="${li}">${esc(l.note || '')}</textarea></label></div>`
         ).join('') +
         `<button type="button" class="btn btn-ghost btn-sm" data-act="add-l" data-ci="${ci}">＋ 新增單元</button></div>`
@@ -703,8 +721,48 @@ pages.edit = async (app, id) => {
     });
   }
 
+  // 上傳中的單元：單元 id → 進度 %
+  const uploads = {};
+  let storageMod = null, storage = null;
+  async function uploadVideo(lessonId, file) {
+    if (!/^video\//.test(file.type)) return toast('請選擇影片檔（例如 .mp4）');
+    if (file.size > 2 * 1024 ** 3) return toast('影片檔超過 2GB，請先壓縮後再上傳');
+    if (!storageMod) {
+      storageMod = await import(FIREBASE + 'firebase-storage.js');
+      storage = storageMod.getStorage();
+    }
+    const ext = (file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4';
+    const r = storageMod.ref(storage, `videos/${c.id}/${lessonId}-${Date.now()}.${ext}`);
+    const task = storageMod.uploadBytesResumable(r, file, { contentType: file.type });
+    uploads[lessonId] = 0;
+    const show = (t) => { const el = app.querySelector(`[data-prog="${lessonId}"]`); if (el) el.textContent = t; };
+    show('上傳中 0%');
+    task.on('state_changed', (snap) => {
+      uploads[lessonId] = Math.floor(snap.bytesTransferred / snap.totalBytes * 100);
+      show(`上傳中 ${uploads[lessonId]}%`);
+    });
+    try {
+      await task;
+      const url = await storageMod.getDownloadURL(r);
+      collect();
+      videos[lessonId] = url;
+      delete uploads[lessonId];
+      draw(); bind();
+      toast('影片上傳完成，記得按「儲存」');
+    } catch (err) {
+      console.error(err);
+      delete uploads[lessonId];
+      show('上傳失敗');
+      toast('上傳失敗：' + (err.code || err.message) + '（請確認已啟用 Storage 並更新規則）');
+    }
+  }
+
   function bind() {
     const f = app.querySelector('#ed');
+    f.onchange = (e) => {
+      const lid = e.target.dataset && e.target.dataset.upload;
+      if (lid && e.target.files[0]) uploadVideo(lid, e.target.files[0]);
+    };
     const fileInput = app.querySelector('#cover-file');
     fileInput.onchange = async () => {
       const file = fileInput.files[0];
@@ -751,8 +809,9 @@ pages.edit = async (app, id) => {
       if (c.freeFrom && !c.freeUntil) return toast('請設定限時免費的結束時間');
       if (c.freeUntil && c.freeFrom && c.freeUntil <= c.freeFrom) return toast('限時免費的結束時間必須晚於開始時間');
       if (c.freeUntil && !c.price) return toast('設定限時免費時，售價請填一般價格（大於 0）；售價 0 代表永久免費');
-      const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]));
-      if (bad) return toast(`「${bad.title}」的 YouTube 網址格式不正確`);
+      if (Object.keys(uploads).length) return toast('還有影片正在上傳，請等上傳完成再儲存');
+      const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]) && !bunnyIds(videos[l.id]) && !isFileVideo(videos[l.id]));
+      if (bad) return toast(`「${bad.title}」的影片網址格式不正確`);
       // 只保留還存在的單元的影片
       const ids = lessonsOf(c).map((l) => l.id);
       Object.keys(videos).forEach((k) => { if (!ids.includes(k)) delete videos[k]; });
