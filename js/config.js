@@ -15,5 +15,5 @@ window.SITE_CONFIG = {
   },
 
   // 學生想購買課程時，課程頁會顯示這段聯絡方式
-  contact: '請來信 hello@101academy.com 或加 LINE：@101academy 購買課程，付款後我們會為你開通。'
+  contact: '來信 salimachchang@gmail.com 購買，付款後為你開通。'
 };
