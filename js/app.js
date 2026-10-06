@@ -10,7 +10,7 @@ const CONFIG = window.SITE_CONFIG || {};
 const configured = !!(CONFIG.firebaseConfig && CONFIG.firebaseConfig.apiKey);
 
 let fb = null;           // Firebase 函式
-let auth = null, db = null;
+let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
 let accessReady = Promise.resolve();
@@ -121,7 +121,7 @@ async function initFirebase() {
     import(FIREBASE + 'firebase-firestore.js')
   ]);
   fb = { ...a, ...f };
-  const firebaseApp = app.initializeApp(CONFIG.firebaseConfig);
+  const firebaseApp = fbApp = app.initializeApp(CONFIG.firebaseConfig);
   auth = a.getAuth(firebaseApp);
   auth.languageCode = 'zh-TW'; // 驗證信、重設密碼信使用繁體中文
   db = f.getFirestore(firebaseApp);
@@ -243,6 +243,81 @@ pages.home = (app) => {
   draw();
 };
 
+/* ---------------- 線上付款（綠界 ECPay） ---------------- */
+// config.js 的 onlinePayment：true = 所有人；'admin' = 只有管理者（綠界測試期間）；false = 關閉
+const payEnabled = () => CONFIG.onlinePayment === true || (CONFIG.onlinePayment === 'admin' && isAdmin());
+
+// 呼叫 Cloud Function 建立訂單，再把表單送到綠界付款頁
+async function startPayment(c, btn) {
+  btn.dataset.label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在前往付款頁…';
+  try {
+    const fn = await import(FIREBASE + 'firebase-functions.js');
+    const createOrder = fn.httpsCallable(fn.getFunctions(fbApp, 'asia-east1'), 'createOrder');
+    const { data } = await createOrder({ courseId: c.id });
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = data.action;
+    Object.entries(data.fields).forEach(([k, v]) => {
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = k; input.value = v;
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false;
+    btn.textContent = btn.dataset.label || `💳 線上付款 ${money(c.price)}`;
+    toast(e && e.message && !/internal/i.test(e.code || '') ? e.message : '目前無法建立訂單，請稍後再試');
+  }
+}
+
+const ORDER_STATUS = { pending: '等待付款', paid: '付款成功', failed: '付款失敗', amount_mismatch: '金額不符', simulated: '模擬付款（未開通）' };
+
+// 付款完成後從綠界回到這裡：顯示訂單狀態（等待綠界通知時自動重新檢查）
+pages.order = async (app, id) => {
+  if (!user) return go('/login?next=/order/' + id);
+  let tries = 0;
+  async function check() {
+    if (!document.body.contains(app)) return;
+    let o = null;
+    try { const snap = await fb.getDoc(fb.doc(db, 'orders', id)); o = snap.exists() ? snap.data() : null; }
+    catch (e) { console.error(e); }
+    if (!document.body.contains(app)) return;
+    if (!o) { app.innerHTML = '<div class="container narrow"><h1>找不到訂單</h1><div class="card pad"><p>請確認登入的帳號與付款時相同。</p><a class="btn btn-sm" href="#/">回到首頁</a></div></div>'; return; }
+    const c = findCourse(o.courseId);
+    const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+    const info = '<dl class="order-info">' + row('訂單編號', `<span class="mono">${esc(id)}</span>`) + row('課程', esc(o.courseTitle || o.courseId)) +
+      row('金額', money(o.amount)) + row('狀態', esc(ORDER_STATUS[o.status] || o.status)) + '</dl>';
+    if (o.status === 'paid') {
+      accessReady = loadAccess();
+      await accessReady;
+      app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
+        '<p>課程已經為你開通，現在就可以開始上課！</p>' +
+        `<a class="btn btn-block" href="#/learn/${esc(o.courseId)}">開始上課</a></div></div>`;
+      return;
+    }
+    if (o.status === 'pending') {
+      tries++;
+      app.innerHTML = '<div class="container narrow"><h1>付款確認中…</h1><div class="card pad">' + info +
+        (tries < 40
+          ? '<p class="muted">正在等待綠界的付款通知，通常幾秒鐘內就會完成，請稍候。</p>'
+          : '<p class="muted">還沒收到付款結果。如果你選擇 ATM 轉帳或超商代碼，完成繳費後才會自動開通；已經付款卻沒有開通，請來信並提供訂單編號。</p>') +
+        `<p class="muted small">有問題請來信 ${esc(SITE_PAGES.email)}，並附上訂單編號。</p>` +
+        (c ? `<a class="btn btn-ghost btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '') + '</div></div>';
+      if (tries < 40) setTimeout(check, 3000);
+      return;
+    }
+    app.innerHTML = '<div class="container narrow"><h1>付款未完成</h1><div class="card pad">' + info +
+      '<p>這筆訂單沒有付款成功，課程尚未開通。你可以回到課程頁重新付款。</p>' +
+      (c ? `<a class="btn btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '') + '</div></div>';
+  }
+  app.innerHTML = '<div class="container"><p class="muted">載入訂單中…</p></div>';
+  check();
+};
+
 // 課程介紹頁（公開）
 pages.course = (app, id) => {
   const c = findCourse(id);
@@ -258,8 +333,11 @@ pages.course = (app, id) => {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/verify">請先驗證 Email</a>` +
       '<p class="muted small">完成 Email 驗證後即可觀看。</p>';
   } else {
-    box = `<p>${priceTag(c)}</p><div class="notice">${esc(CONFIG.contact || '請聯繫我們開通課程。')}</div>` +
-      `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`;
+    box = `<p>${priceTag(c)}</p>` + (payEnabled()
+      ? `<button class="btn btn-block" id="pay">💳 線上付款 ${money(c.price)}</button>` +
+        '<p class="muted small">由綠界科技 ECPay 提供安全付款，支援信用卡、ATM 轉帳、超商代碼等方式。付款成功後自動開通。</p>'
+      : `<div class="notice">${esc(CONFIG.contact || '請聯繫我們開通課程。')}</div>` +
+        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`);
   }
 
   app.innerHTML = '<div class="container course-page">' +
@@ -276,6 +354,13 @@ pages.course = (app, id) => {
       '</div>').join('') +
     '</div>' +
     `<aside class="card buy">${thumb(c)}<div class="pad">${box}</div></aside></div>`;
+  // 管理者：測試線上付款（管理者本身可看所有課程，所以另外提供測試按鈕）
+  if (mine && isAdmin() && !access.includes(c.id) && c.price > 0 && !isFree(c) && payEnabled()) {
+    app.querySelector('.buy .pad').insertAdjacentHTML('beforeend',
+      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(c.price)}</button>`);
+  }
+  const payBtn = app.querySelector('#pay');
+  if (payBtn) payBtn.onclick = () => startPayment(c, payBtn);
 };
 
 // 登入 / 註冊
@@ -472,6 +557,7 @@ async function resizeCover(file) {
 pages.admin = async (app, id) => {
   if (!adminGuard(app)) return;
   if (id === 'students') return pages.students(app);
+  if (id === 'orders') return pages.orders(app);
   if (id) return pages.edit(app, id);
   app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
     (coursesFromDb ? '' :
@@ -512,7 +598,29 @@ pages.admin = async (app, id) => {
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理</a>` +
-  `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a></div>`;
+  `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a>` +
+  `<a class="chip${cur === 'orders' ? ' active' : ''}" href="#/admin/orders">訂單</a></div>`;
+
+// 線上付款訂單列表
+pages.orders = async (app) => {
+  if (!adminGuard(app)) return;
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  let list = [];
+  try {
+    const snap = await fb.getDocs(fb.collection(db, 'orders'));
+    list = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => ((b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0)));
+  } catch (e) { console.error(e); }
+  if (!document.body.contains(app)) return;
+  const when = (t) => (t && t.toMillis ? fmtTime(t.toMillis()) : '');
+  const paid = list.filter((o) => o.status === 'paid' && !o.simulated);
+  app.innerHTML = '<div class="container editor">' + adminTabs('orders') + '<h1>訂單</h1>' +
+    `<p class="muted small">共 ${list.length} 筆，已付款 ${paid.length} 筆，實收 ${money(paid.reduce((s, o) => s + o.amount, 0))}（不含測試／模擬付款）</p>` +
+    (list.length ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>時間</th><th>學生</th><th>課程</th><th>金額</th><th>狀態</th></tr></thead><tbody>' +
+      list.map((o) => `<tr><td class="small">${when(o.createdAt)}</td><td class="small">${esc(o.email)}</td><td class="small">${esc(o.courseTitle || o.courseId)}</td>` +
+        `<td class="mono small">${money(o.amount)}</td><td class="small">${esc(ORDER_STATUS[o.status] || o.status)}${o.env === 'stage' ? '（測試）' : ''}</td></tr>`).join('') +
+      '</tbody></table></div>' : '<p class="muted">還沒有訂單。</p>') + '</div>';
+};
 
 // 學生開通管理：access/{Email} = { courses: [...] }
 pages.students = async (app) => {
