@@ -217,7 +217,7 @@ pages.home = (app) => {
   let cat = '全部', q = '';
   app.innerHTML =
     '<section class="hero"><div class="container">' +
-    '<h1>每天進步 <span class="grad">1%</span>，一年後強大 <span class="grad">37 倍</span></h1>' +
+    '<h1>每天進步 <span class="grad">1%</span>，一年後成長 <span class="grad">37 倍</span></h1>' +
     '<p class="muted">課程開通後即可觀看</p>' +
     '<input class="input search" id="q" placeholder="搜尋課程…" aria-label="搜尋課程" />' +
     '</div></section>' +
