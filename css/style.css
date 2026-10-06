@@ -176,3 +176,10 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .footer-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 8px; }
 .footer-links a:hover { color: var(--primary); }
 .footer p { margin: 0; }
+
+/* 管理者：學生開通 */
+.admin-tabs { margin-top: 24px; }
+.admin-tabs .chip { display: inline-flex; align-items: center; }
+.student { margin-bottom: 12px; }
+.student .check { margin: 8px 0; }
+.search-small { max-width: 240px; margin-top: 0; }

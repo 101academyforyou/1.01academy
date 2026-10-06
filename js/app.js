@@ -451,8 +451,9 @@ async function resizeCover(file) {
 // 課程列表
 pages.admin = async (app, id) => {
   if (!adminGuard(app)) return;
+  if (id === 'students') return pages.students(app);
   if (id) return pages.edit(app, id);
-  app.innerHTML = '<div class="container"><div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
+  app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
     (coursesFromDb ? '' :
       '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
@@ -486,6 +487,102 @@ pages.admin = async (app, id) => {
       pages.admin(app);
     } catch (err) { toast('排序失敗：' + (err.code || err.message)); }
   };
+};
+
+const adminTabs = (cur) => '<div class="chips admin-tabs">' +
+  `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理</a>` +
+  `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a></div>`;
+
+// 學生開通管理：access/{Email} = { courses: [...] }
+pages.students = async (app) => {
+  if (!adminGuard(app)) return;
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  let list = [];
+  try {
+    const snap = await fb.getDocs(fb.collection(db, 'access'));
+    list = snap.docs.map((d) => ({ email: d.id, courses: d.data().courses || [] }))
+      .sort((a, b) => a.email.localeCompare(b.email));
+  } catch (e) {
+    console.error(e);
+    app.innerHTML = '<div class="container">' + adminTabs('students') + '<h1>學生開通</h1><div class="card pad"><p>無法讀取學生名單：' + esc(e.code || e.message) + '</p><p class="muted small">請確認 Firebase 的 Firestore 規則已更新為最新版本。</p></div></div>';
+    return;
+  }
+  if (!document.body.contains(app)) return;
+  // 只列出付費課程（免費課程登入就能看，不需開通）
+  const paid = courses.filter((c) => !isFree(c));
+  const name = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
+  const boxes = (prefix, selected) => paid.length
+    ? paid.map((c) => `<label class="check"><input type="checkbox" data-${prefix}="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}/> ${esc(c.title)}</label>`).join('')
+    : '<p class="muted small">目前沒有付費課程。免費課程登入後就能直接觀看，不需要開通。</p>';
+  let filter = '';
+
+  function draw() {
+    const shown = list.filter((s) => !filter || s.email.includes(filter));
+    app.innerHTML = '<div class="container editor">' + adminTabs('students') + '<h1>學生開通</h1>' +
+      '<form class="card pad" id="add" novalidate><h3>開通新學生</h3>' +
+      '<label>學生的登入 Email<input class="input" name="email" type="email" placeholder="student@gmail.com" required/></label>' +
+      '<p class="muted small">要開通的課程：</p>' + boxes('add', []) +
+      '<button class="btn btn-sm">開通</button>' +
+      '<p class="muted small">學生必須用這個 Email 登入網站；Email 註冊的學生需完成 Email 驗證。</p></form>' +
+      `<div class="row-between"><h2>已開通的學生（${list.length}）</h2>` +
+      `<input class="input search-small" id="filter" placeholder="搜尋 Email" value="${esc(filter)}"/></div>` +
+      (shown.length ? shown.map((s) =>
+        `<div class="card pad student" data-email="${esc(s.email)}"><div class="row-between"><strong>${esc(s.email)}</strong>` +
+        `<span class="lesson-nav"><button type="button" class="btn btn-sm" data-act="save">儲存</button>` +
+        `<button type="button" class="btn btn-ghost btn-sm" data-act="remove">移除</button></span></div>` +
+        boxes('c', s.courses) +
+        s.courses.filter((id) => !paid.some((c) => c.id === id)).map((id) => `<p class="muted small">另有：${esc(name(id))}</p>`).join('') +
+        '</div>').join('') : '<p class="muted">還沒有開通任何學生。</p>') +
+      '</div>';
+
+    const f = app.querySelector('#add');
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const email = f.email.value.trim().toLowerCase();
+      if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) return toast('Email 格式不正確');
+      const picked = [...f.querySelectorAll('[data-add]:checked')].map((el) => el.dataset.add);
+      if (!picked.length) return toast('請至少勾選一門課程');
+      const existing = list.find((s) => s.email === email);
+      const merged = [...new Set([...(existing ? existing.courses : []), ...picked])];
+      try {
+        await fb.setDoc(fb.doc(db, 'access', email), { courses: merged });
+        if (existing) existing.courses = merged; else list.push({ email, courses: merged });
+        list.sort((a, b) => a.email.localeCompare(b.email));
+        toast(`已為 ${email} 開通`);
+        draw();
+      } catch (err) { toast('開通失敗：' + (err.code || err.message)); }
+    };
+    app.querySelector('#filter').oninput = (e) => {
+      filter = e.target.value.trim().toLowerCase();
+      const pos = e.target.selectionStart;
+      draw();
+      const el = app.querySelector('#filter'); el.focus(); el.setSelectionRange(pos, pos);
+    };
+    app.querySelectorAll('.student').forEach((card) => {
+      card.onclick = async (e) => {
+        const act = e.target.dataset && e.target.dataset.act;
+        if (!act) return;
+        const email = card.dataset.email;
+        const s = list.find((x) => x.email === email);
+        try {
+          if (act === 'remove') {
+            if (!confirm(`確定移除 ${email} 的所有課程權限？`)) return;
+            await fb.deleteDoc(fb.doc(db, 'access', email));
+            list = list.filter((x) => x.email !== email);
+            toast('已移除');
+          } else {
+            // 保留不在付費清單中的課程 id（例如已刪除的課程），只更新勾選的付費課程
+            const others = s.courses.filter((id) => !paid.some((c) => c.id === id));
+            s.courses = [...others, ...[...card.querySelectorAll('[data-c]:checked')].map((el) => el.dataset.c)];
+            await fb.setDoc(fb.doc(db, 'access', email), { courses: s.courses });
+            toast('已儲存');
+          }
+          draw();
+        } catch (err) { toast('操作失敗：' + (err.code || err.message)); }
+      };
+    });
+  }
+  draw();
 };
 
 // 編輯單一課程
