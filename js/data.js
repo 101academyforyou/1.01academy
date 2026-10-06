@@ -18,8 +18,11 @@ var COURSES = [
     description: '介紹如何執行 DSMGA-II-TwoEdge，一種建構模型的基因演算法（Model-Building Genetic Algorithm）。',
     outcomes: ['認識 DSMGA-II-TwoEdge', '了解建構模型的基因演算法', '學會執行 DSMGA-II-TwoEdge'],
     chapters: [
-      // 單元影片網址放在 Firebase：courseVideos / course1 / l1
-      { title: '課程內容', lessons: [['l1', '執行 DSMGA-II-TwoEdge 簡介', 0]] }
+      // 單元影片網址放在 Firebase：courseVideos / course1 / l1、l2
+      { title: '課程內容', lessons: [
+        ['l1', '執行 DSMGA-II-TwoEdge 簡介', 0],
+        ['l2', 'Introduction to DSMGA-II-TwoEdge', 0]
+      ] }
     ]
   }
 ];
