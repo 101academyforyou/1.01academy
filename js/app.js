@@ -13,6 +13,7 @@ let fb = null;           // Firebase 函式
 let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
+let accessExp = {};      // 課程 id → 觀看期限（毫秒）；沒有 = 不限期限
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
@@ -95,7 +96,12 @@ const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowe
 // 免費：售價 0（永久免費）或在限時免費期間內
 const isFree = (c) => !!c && (!c.price || inFreeWindow(c));
 // 免費課程：登入（並驗證 Email）就能看；付費課程：需要開通
-const owns = (courseId) => isVerified() && (access.includes(courseId) || isAdmin() || isFree(findCourse(courseId)));
+// 付費課程觀看期限：購買後一年
+const oneYearFrom = (ms) => { const d = new Date(ms); d.setFullYear(d.getFullYear() + 1); return d.getTime(); };
+const expiryOf = (id) => Number(accessExp[id]) || 0;
+const granted = (id) => access.includes(id) && (!expiryOf(id) || expiryOf(id) > Date.now());
+const expired = (id) => access.includes(id) && !!expiryOf(id) && expiryOf(id) <= Date.now();
+const owns = (courseId) => isVerified() && (granted(courseId) || isAdmin() || isFree(findCourse(courseId)));
 
 /* ---------------- 學習進度（存在瀏覽器） ---------------- */
 function doneList(courseId) {
@@ -138,10 +144,12 @@ async function initFirebase() {
 
 async function loadAccess() {
   access = [];
+  accessExp = {};
   if (!isVerified()) return;
   try {
     const snap = await fb.getDoc(fb.doc(db, 'access', user.email.toLowerCase()));
     access = snap.exists() ? (snap.data().courses || []) : [];
+    accessExp = snap.exists() ? (snap.data().expires || {}) : {};
   } catch (e) {
     console.error(e);
   }
@@ -235,7 +243,7 @@ pages.home = (app) => {
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
       `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
-      `<div>${isVerified() && access.includes(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
+      `<div>${isVerified() && granted(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
   }
   app.querySelector('#chips').onclick = (e) => { if (e.target.dataset.cat) { cat = e.target.dataset.cat; draw(); } };
@@ -296,6 +304,7 @@ pages.order = async (app, id) => {
       await accessReady;
       app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
         '<p>課程已經為你開通，現在就可以開始上課！</p>' +
+        (expiryOf(o.courseId) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(o.courseId))}</p>` : '') +
         `<a class="btn btn-block" href="#/learn/${esc(o.courseId)}">開始上課</a></div></div>`;
       return;
     }
@@ -325,7 +334,8 @@ pages.course = (app, id) => {
   const mine = owns(c.id);
   let box;
   if (mine) {
-    box = (access.includes(c.id) || isAdmin() ? `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>` : `<p>${priceTag(c)}</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
+    box = (granted(c.id) || isAdmin() ? `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>` +
+      (granted(c.id) && expiryOf(c.id) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(c.id))}</p>` : '') : `<p>${priceTag(c)}</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
   } else if (!user) {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">${isFree(c) ? '免費登入觀看' : '登入以觀看'}</a>` +
       `<p class="muted small">${isFree(c) ? '免費課程，登入後即可直接觀看。' : '已購買的學員請登入觀看課程。'}</p>`;
@@ -333,9 +343,11 @@ pages.course = (app, id) => {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/verify">請先驗證 Email</a>` +
       '<p class="muted small">完成 Email 驗證後即可觀看。</p>';
   } else {
-    box = `<p>${priceTag(c)}</p>` + (payEnabled()
+    box = `<p>${priceTag(c)}</p>` +
+      (expired(c.id) ? `<div class="notice">你的觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期，重新購買即可再觀看一年。</div>` : '') +
+      (payEnabled()
       ? `<button class="btn btn-block" id="pay">💳 線上付款 ${money(c.price)}</button>` +
-        '<p class="muted small">由綠界科技 ECPay 提供安全付款，支援信用卡、ATM 轉帳、超商代碼等方式。付款成功後自動開通。</p>'
+        '<p class="muted small">購買後可觀看一年（自開通日起算）。由綠界科技 ECPay 提供安全付款，支援信用卡、ATM 轉帳、超商代碼等方式，付款成功後自動開通。</p>'
       : `<div class="notice">${esc(CONFIG.contact || '請聯繫我們開通課程。')}</div>` +
         `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`);
   }
@@ -355,7 +367,7 @@ pages.course = (app, id) => {
     '</div>' +
     `<aside class="card buy">${thumb(c)}<div class="pad">${box}</div></aside></div>`;
   // 管理者：測試線上付款（管理者本身可看所有課程，所以另外提供測試按鈕）
-  if (mine && isAdmin() && !access.includes(c.id) && c.price > 0 && !isFree(c) && payEnabled()) {
+  if (mine && isAdmin() && !granted(c.id) && c.price > 0 && !isFree(c) && payEnabled()) {
     app.querySelector('.buy .pad').insertAdjacentHTML('beforeend',
       `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(c.price)}</button>`);
   }
@@ -459,13 +471,18 @@ pages.verify = (app) => {
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
-  // 已開通的課程 + 所有免費課程
+  // 已開通的課程 + 所有免費課程 + 已到期的課程（可重新購買）
   const list = visibleCourses().filter((c) => access.includes(c.id) || isFree(c) || isAdmin());
   app.innerHTML = '<div class="container"><h1>我的課程</h1>' + (list.length
     ? '<div class="grid">' + list.map((c) => {
         const p = progress(c);
+        if (!owns(c.id)) {
+          return `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
+            `<p class="expired small">觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期</p><p class="muted small">點這裡重新購買</p></div></a>`;
+        }
         return `<a class="card course" href="#/learn/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
-          `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%</p></div></a>`;
+          `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%` +
+          (granted(c.id) && expiryOf(c.id) ? ` · 觀看期限至 ${fmtTime(expiryOf(c.id))}` : '') + '</p></div></a>';
       }).join('') + '</div>'
     : '<div class="card pad"><p>目前還沒有開通的課程。</p>' +
       `<p class="muted small">課程開通時，我們會用你的登入 Email（<strong>${esc(user.email)}</strong>）為你開通。</p>` +
@@ -479,7 +496,9 @@ pages.learn = async (app, id, query, lessonId) => {
   if (!user) return go(`/login?next=/learn/${id}`);
   if (!isVerified()) return pages.verify(app);
   if (!owns(c.id)) {
-    app.innerHTML = `<div class="container narrow"><h1>尚未開通</h1><div class="card pad"><p>你還沒有這門課程的觀看權限。</p><a class="btn btn-sm" href="#/course/${c.id}">查看購買方式</a></div></div>`;
+    app.innerHTML = expired(c.id)
+      ? `<div class="container narrow"><h1>觀看期限已到期</h1><div class="card pad"><p>你的觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期，重新購買即可再觀看一年。</p><a class="btn btn-sm" href="#/course/${c.id}">重新購買</a></div></div>`
+      : `<div class="container narrow"><h1>尚未開通</h1><div class="card pad"><p>你還沒有這門課程的觀看權限。</p><a class="btn btn-sm" href="#/course/${c.id}">查看購買方式</a></div></div>`;
     return;
   }
   app.innerHTML = '<div class="container"><p class="muted">載入課程中…</p></div>';
@@ -629,7 +648,7 @@ pages.students = async (app) => {
   let list = [];
   try {
     const snap = await fb.getDocs(fb.collection(db, 'access'));
-    list = snap.docs.map((d) => ({ email: d.id, courses: d.data().courses || [] }))
+    list = snap.docs.map((d) => ({ email: d.id, courses: d.data().courses || [], expires: d.data().expires || {} }))
       .sort((a, b) => a.email.localeCompare(b.email));
   } catch (e) {
     console.error(e);
@@ -640,8 +659,16 @@ pages.students = async (app) => {
   // 只列出付費課程（免費課程登入就能看，不需開通）
   const paid = courses.filter((c) => c.price > 0); // 含限時免費的課程（期間結束後需要開通）
   const name = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
-  const boxes = (prefix, selected) => paid.length
-    ? paid.map((c) => `<label class="check"><input type="checkbox" data-${prefix}="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}/> ${esc(c.title)}</label>`).join('')
+  // 日期 ↔ 毫秒（到期日當天 23:59:59 為止）
+  const toDateInput = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+  const fromDateInput = (v) => (v ? new Date(v + 'T23:59:59').getTime() : 0);
+  const boxes = (prefix, selected, expires) => paid.length
+    ? paid.map((c) => {
+        const exp = expires ? Number(expires[c.id]) || 0 : 0;
+        return `<div class="grant-row"><label class="check"><input type="checkbox" data-${prefix}="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}/> ${esc(c.title)}</label>` +
+          (expires ? `<label class="small grant-exp">到期日 <input class="input" type="date" data-exp="${esc(c.id)}" value="${toDateInput(exp)}"/></label>` +
+            (selected.includes(c.id) && exp && exp <= Date.now() ? '<span class="expired small">已到期</span>' : '') : '') + '</div>';
+      }).join('') + (expires ? '<p class="muted small">到期日留空 = 不限期限</p>' : '')
     : '<p class="muted small">目前沒有付費課程。免費課程登入後就能直接觀看，不需要開通。</p>';
   let filter = '';
 
@@ -651,6 +678,7 @@ pages.students = async (app) => {
       '<form class="card pad" id="add" novalidate><h3>開通新學生</h3>' +
       '<label>學生的登入 Email<input class="input" name="email" type="email" placeholder="student@gmail.com" required/></label>' +
       '<p class="muted small">要開通的課程：</p>' + boxes('add', []) +
+      `<label>觀看到期日 <span class="muted small">預設為一年後，留空 = 不限期限</span><input class="input" type="date" name="exp" value="${toDateInput(oneYearFrom(Date.now()))}"/></label>` +
       '<button class="btn btn-sm">開通</button>' +
       '<p class="muted small">學生必須用這個 Email 登入網站；Email 註冊的學生需完成 Email 驗證。</p></form>' +
       `<div class="row-between"><h2>已開通的學生（${list.length}）</h2>` +
@@ -659,7 +687,7 @@ pages.students = async (app) => {
         `<div class="card pad student" data-email="${esc(s.email)}"><div class="row-between"><strong>${esc(s.email)}</strong>` +
         `<span class="lesson-nav"><button type="button" class="btn btn-sm" data-act="save">儲存</button>` +
         `<button type="button" class="btn btn-ghost btn-sm" data-act="remove">移除</button></span></div>` +
-        boxes('c', s.courses) +
+        boxes('c', s.courses, s.expires) +
         s.courses.filter((id) => !paid.some((c) => c.id === id)).map((id) => `<p class="muted small">另有：${esc(name(id))}</p>`).join('') +
         '</div>').join('') : '<p class="muted">還沒有開通任何學生。</p>') +
       '</div>';
@@ -673,9 +701,12 @@ pages.students = async (app) => {
       if (!picked.length) return toast('請至少勾選一門課程');
       const existing = list.find((s) => s.email === email);
       const merged = [...new Set([...(existing ? existing.courses : []), ...picked])];
+      const expires = { ...(existing ? existing.expires : {}) };
+      const exp = fromDateInput(f.exp.value);
+      picked.forEach((id) => { if (exp) expires[id] = exp; else delete expires[id]; });
       try {
-        await fb.setDoc(fb.doc(db, 'access', email), { courses: merged });
-        if (existing) existing.courses = merged; else list.push({ email, courses: merged });
+        await fb.setDoc(fb.doc(db, 'access', email), { courses: merged, expires });
+        if (existing) { existing.courses = merged; existing.expires = expires; } else list.push({ email, courses: merged, expires });
         list.sort((a, b) => a.email.localeCompare(b.email));
         toast(`已為 ${email} 開通`);
         draw();
@@ -702,8 +733,13 @@ pages.students = async (app) => {
           } else {
             // 保留不在付費清單中的課程 id（例如已刪除的課程），只更新勾選的付費課程
             const others = s.courses.filter((id) => !paid.some((c) => c.id === id));
-            s.courses = [...others, ...[...card.querySelectorAll('[data-c]:checked')].map((el) => el.dataset.c)];
-            await fb.setDoc(fb.doc(db, 'access', email), { courses: s.courses });
+            const checked = [...card.querySelectorAll('[data-c]:checked')].map((el) => el.dataset.c);
+            const expires = {};
+            others.forEach((id) => { if (s.expires[id]) expires[id] = s.expires[id]; });
+            checked.forEach((id) => { const v = fromDateInput(card.querySelector(`[data-exp="${id}"]`).value); if (v) expires[id] = v; });
+            s.courses = [...others, ...checked];
+            s.expires = expires;
+            await fb.setDoc(fb.doc(db, 'access', email), { courses: s.courses, expires });
             toast('已儲存');
           }
           draw();

@@ -15,7 +15,7 @@ window.SITE_CONFIG = {
   },
 
   // 學生想購買課程時，課程頁會顯示這段聯絡方式
-  contact: '來信 salimachchang@gmail.com 購買，付款後為你開通。',
+  contact: '來信 1.01academyforyou@gmail.com 購買，付款後為你開通。',
 
   // 線上付款（綠界 ECPay，付款後自動開通；需要先部署 functions/，見 README.md）
   //   'admin' = 只有管理者看得到付款按鈕（綠界測試期間）

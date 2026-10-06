@@ -26,6 +26,14 @@ const ADMIN_EMAILS = defineString('ADMIN_EMAILS', { default: '' });
 const ECPAY_HASH_KEY = defineSecret('ECPAY_HASH_KEY');
 const ECPAY_HASH_IV = defineSecret('ECPAY_HASH_IV');
 
+// 付費課程觀看期限：一年
+const oneYearFrom = (ms) => { const d = new Date(ms); d.setFullYear(d.getFullYear() + 1); return d.getTime(); };
+const activeGrant = (data, courseId, now = Date.now()) => {
+  if (!data || !(data.courses || []).includes(courseId)) return false;
+  const exp = Number((data.expires || {})[courseId]) || 0;
+  return !exp || exp > now;
+};
+
 const isFreeNow = (c, now = Date.now()) =>
   !c.price || (c.freeUntil > now && (c.freeFrom || 0) <= now);
 
@@ -53,8 +61,8 @@ exports.createOrder = onCall({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV] }, async
   if (!(amount > 0)) throw new HttpsError('failed-precondition', '課程價格設定有誤');
 
   const access = await db.doc(`access/${email}`).get();
-  if (access.exists && (access.data().courses || []).includes(courseId)) {
-    throw new HttpsError('already-exists', '你已經擁有這門課程');
+  if (access.exists && activeGrant(access.data(), courseId)) {
+    throw new HttpsError('already-exists', '你已經擁有這門課程，觀看期限內不需要重新購買');
   }
 
   const tradeNo = ecpay.newTradeNo();
@@ -101,6 +109,8 @@ exports.ecpayNotify = onRequest({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV], invo
       const snap = await tx.get(orderRef);
       if (!snap.exists) { logger.warn('ECPay notify: 找不到訂單', { tradeNo }); return; }
       const order = snap.data();
+      const accessRef = db.doc(`access/${order.email}`);
+      const accessSnap = await tx.get(accessRef); // 交易中所有讀取要在寫入之前
       if (order.status === 'paid') return; // 重複通知
       const simulated = String(p.SimulatePaid) === '1';
       if (String(p.RtnCode) !== '1') {
@@ -117,14 +127,19 @@ exports.ecpayNotify = onRequest({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV], invo
         tx.update(orderRef, { status: 'simulated', updatedAt: FieldValue.serverTimestamp() });
         return;
       }
+      // 觀看期限：付款後一年；若還在期限內（例如重複購買）則從原到期日再延長一年
+      const now = Date.now();
+      const current = accessSnap.exists ? Number(((accessSnap.data().expires || {})[order.courseId])) || 0 : 0;
+      const expiresAt = oneYearFrom(activeGrant(accessSnap.data(), order.courseId, now) && current > now ? current : now);
       tx.update(orderRef, {
         status: 'paid',
+        expiresAt,
         simulated,
         ecpayTradeNo: String(p.TradeNo || ''),
         paymentType: String(p.PaymentType || ''),
         paidAt: FieldValue.serverTimestamp()
       });
-      tx.set(db.doc(`access/${order.email}`), { courses: FieldValue.arrayUnion(order.courseId) }, { merge: true });
+      tx.set(accessRef, { courses: FieldValue.arrayUnion(order.courseId), expires: { [order.courseId]: expiresAt } }, { merge: true });
     });
     res.status(200).send('1|OK');
   } catch (err) {

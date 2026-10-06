@@ -25,7 +25,7 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // access/{學生 Email（小寫）} = { courses: ['course1'] }
+    // access/{學生 Email（小寫）} = { courses: ['course1'], expires: { course1: 到期時間毫秒 } }
     // 學生只能讀自己的開通紀錄；只有管理者能修改
     match /access/{email} {
       allow read: if (signedInEmail() && request.auth.token.email.lower() == email) || isAdmin();
@@ -46,10 +46,13 @@ service cloud.firestore {
       return exists(course) && freeNow(get(course).data);
     }
 
-    // 付費課程：access/{Email} 的 courses 裡有這門課
+    // 付費課程：access/{Email} 的 courses 裡有這門課，且在觀看期限內
+    // expires/{課程id} = 到期時間（毫秒）；沒有設定 = 不限期限
     function isGranted(courseId) {
       let me = /databases/$(database)/documents/access/$(request.auth.token.email.lower());
-      return exists(me) && courseId in get(me).data.courses;
+      return exists(me) && courseId in get(me).data.courses
+        && (get(me).data.get('expires', {}).get(courseId, 0) == 0
+          || get(me).data.get('expires', {}).get(courseId, 0) > request.time.toMillis());
     }
 
     // courseVideos/{課程id} = { l1: 'YouTube 網址', l2: ... }
