@@ -190,7 +190,7 @@ function renderHeader() {
   const name = user ? (user.displayName || user.email) : '';
   document.getElementById('header').innerHTML =
     '<div class="container nav">' +
-    '<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"></span>1.01 Academy</a>' +
+    '<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M12 2.5C8.6 7 5 11.3 5 15a7 7 0 0 0 14 0c0-3.7-3.6-8-7-12.5z"/><path fill="none" stroke="rgba(79,70,229,.45)" stroke-width="1.6" stroke-linecap="round" d="M9 15.2a3 3 0 0 0 2.6 2.9"/></svg></span>1.01 Academy</a>' +
     '<nav>' +
     '<a href="#/">所有課程</a>' +
     (user
