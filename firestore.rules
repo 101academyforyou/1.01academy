@@ -1,0 +1,36 @@
+rules_version = '2';
+
+// 1.01 Academy — Firestore 安全規則
+// 貼到 Firebase 主控台 → Firestore Database → 規則 → 發布
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 已驗證 Email 的登入者，用來比對開通名單
+    function signedInEmail() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email != null;
+    }
+
+    // access/{學生 Email（小寫）} = { courses: ['react', 'figma'] }
+    // 學生只能讀自己的開通紀錄；只有你能在主控台修改
+    match /access/{email} {
+      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow write: if false;
+    }
+
+    // courseVideos/{課程id} = { l1: 'YouTube 影片 ID 或網址', l2: ... }
+    // 只有被開通該課程的學生讀得到
+    match /courseVideos/{courseId} {
+      allow read: if signedInEmail()
+        && exists(/databases/$(database)/documents/access/$(request.auth.token.email.lower()))
+        && courseId in get(/databases/$(database)/documents/access/$(request.auth.token.email.lower())).data.courses;
+      allow write: if false;
+    }
+
+    // 其他資料一律禁止
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
