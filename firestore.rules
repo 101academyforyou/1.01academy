@@ -32,12 +32,18 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // 免費課程：courses/{課程id} 的 price 為 0 且已上架
+    // 免費課程：已上架，且售價為 0（永久免費）或現在在限時免費期間內
+    // 限時免費期間：freeFrom（毫秒，0 = 立即）≤ 現在 < freeUntil（毫秒）
+    function freeNow(d) {
+      let now = request.time.toMillis();
+      return d.get('published', true) != false
+        && (d.get('price', 1) == 0
+          || (d.get('freeUntil', 0) > now && d.get('freeFrom', 0) <= now));
+    }
+
     function isFreeCourse(courseId) {
       let course = /databases/$(database)/documents/courses/$(courseId);
-      return exists(course)
-        && get(course).data.get('price', 1) == 0
-        && get(course).data.get('published', true) != false;
+      return exists(course) && freeNow(get(course).data);
     }
 
     // 付費課程：access/{Email} 的 courses 裡有這門課

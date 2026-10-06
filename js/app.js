@@ -44,15 +44,26 @@ function thumb(c) {
   return `<div class="thumb" style="background:linear-gradient(135deg,${esc(c.thumb[0])},${esc(c.thumb[1])})"><span>${esc(c.thumb[2])}</span></div>`;
 }
 
+// 時間格式：2026/10/31 23:59
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtTime = (ms) => { const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+
+// 限時免費期間：freeFrom（可為 0 = 立即）≤ 現在 < freeUntil
+const inFreeWindow = (c) => !!c && c.freeUntil > 0 && (c.freeFrom || 0) <= Date.now() && Date.now() < c.freeUntil;
+const freeUpcoming = (c) => !!c && c.freeUntil > Date.now() && c.freeFrom > Date.now();
+
 function priceTag(c) {
+  if (c.price && inFreeWindow(c)) {
+    return `<span class="price free">限時免費</span> <s class="muted small">${money(Math.max(c.price, c.originalPrice || 0))}</s>` +
+      `<span class="free-until">優惠至 ${fmtTime(c.freeUntil)}</span>`;
+  }
   if (!c.price) {
-    // 原價 > 0、售價 0：顯示「限時免費」並劃掉原價
-    return c.originalPrice > 0
-      ? `<span class="price free">限時免費</span> <s class="muted small">${money(c.originalPrice)}</s>`
-      : '';
+    // 售價 0 = 永久免費；有原價時劃掉原價
+    return `<span class="price free">免費</span>` + (c.originalPrice > 0 ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '');
   }
   return `<span class="price">${money(c.price)}</span>` +
-    (c.originalPrice > c.price ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '');
+    (c.originalPrice > c.price ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '') +
+    (freeUpcoming(c) ? `<span class="free-until">${fmtTime(c.freeFrom)} 起限時免費</span>` : '');
 }
 
 // 接受 YouTube 影片 ID 或各種網址格式，回傳 11 碼 ID
@@ -75,7 +86,8 @@ function youtubeEmbed(v) {
 
 const isVerified = () => !!(user && user.emailVerified);
 const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowerCase() === user.email.toLowerCase());
-const isFree = (c) => !!c && !c.price;
+// 免費：售價 0（永久免費）或在限時免費期間內
+const isFree = (c) => !!c && (!c.price || inFreeWindow(c));
 // 免費課程：登入（並驗證 Email）就能看；付費課程：需要開通
 const owns = (courseId) => isVerified() && (access.includes(courseId) || isAdmin() || isFree(findCourse(courseId)));
 
@@ -218,7 +230,7 @@ pages.home = (app) => {
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
       `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
-      `<div>${owns(c.id) && !isFree(c) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
+      `<div>${isVerified() && access.includes(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
   }
   app.querySelector('#chips').onclick = (e) => { if (e.target.dataset.cat) { cat = e.target.dataset.cat; draw(); } };
@@ -233,7 +245,7 @@ pages.course = (app, id) => {
   const mine = owns(c.id);
   let box;
   if (mine) {
-    box = (isFree(c) ? `<p>${priceTag(c)}</p>` : `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
+    box = (access.includes(c.id) || isAdmin() ? `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>` : `<p>${priceTag(c)}</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
   } else if (!user) {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">${isFree(c) ? '免費登入觀看' : '登入以觀看'}</a>` +
       `<p class="muted small">${isFree(c) ? '免費課程，登入後即可直接觀看。' : '已購買的學員請登入觀看課程。'}</p>`;
@@ -427,6 +439,8 @@ pages.learn = async (app, id, query, lessonId) => {
 };
 
 /* ---------------- 管理者：編輯課程 ---------------- */
+// 毫秒 ↔ <input type="datetime-local"> 的本地時間字串
+const toLocalInput = (ms) => (ms ? new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
 const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
 function adminGuard(app) {
@@ -459,7 +473,8 @@ pages.admin = async (app, id) => {
       '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
     '<div class="admin-list">' + courses.map((c, i) =>
       `<div class="card admin-row">${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
-      `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}</p>` +
+      `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}` +
+      (inFreeWindow(c) ? ` · <span class="tag">限時免費中，至 ${fmtTime(c.freeUntil)}</span>` : freeUpcoming(c) ? ` · ${fmtTime(c.freeFrom)} 起限時免費` : c.freeUntil > 0 && c.price ? ' · 限時免費已結束' : '') + '</p>' +
       `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
       `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
       (coursesFromDb && i > 0 ? `<button class="btn btn-ghost btn-sm" data-up="${i}">↑ 往前</button>` : '') +
@@ -509,7 +524,7 @@ pages.students = async (app) => {
   }
   if (!document.body.contains(app)) return;
   // 只列出付費課程（免費課程登入就能看，不需開通）
-  const paid = courses.filter((c) => !isFree(c));
+  const paid = courses.filter((c) => c.price > 0); // 含限時免費的課程（期間結束後需要開通）
   const name = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
   const boxes = (prefix, selected) => paid.length
     ? paid.map((c) => `<label class="check"><input type="checkbox" data-${prefix}="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''}/> ${esc(c.title)}</label>`).join('')
@@ -618,7 +633,10 @@ pages.edit = async (app, id) => {
       field('副標題', 'subtitle', c.subtitle) +
       '<div class="two">' + field('分類', 'category', c.category) + field('程度', 'level', c.level) + '</div>' +
       '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
-      '<div class="two">' + field('售價（0 = 免費）', 'price', c.price, 'type="number" min="0"') + field('原價（會顯示劃掉的價格，0 = 不顯示）', 'originalPrice', c.originalPrice, 'type="number" min="0"') + '</div>' +
+      '<div class="two">' + field('售價（0 = 永久免費）', 'price', c.price, 'type="number" min="0"') + field('原價（會顯示劃掉的價格，0 = 不顯示）', 'originalPrice', c.originalPrice, 'type="number" min="0"') + '</div>' +
+      '<div class="free-window"><strong class="small">限時免費</strong><p class="muted small">在這段時間內，登入的學生都能免費觀看；時間到了就恢復售價，需要開通才能看。售價請填一般價格（大於 0）。兩個都留空 = 不設定。</p>' +
+      '<div class="two">' + field('開始時間（留空 = 立即開始）', 'freeFrom', toLocalInput(c.freeFrom), 'type="datetime-local"') +
+      field('結束時間', 'freeUntil', toLocalInput(c.freeUntil), 'type="datetime-local"') + '</div></div>' +
       `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label></div>` +
 
       '<div class="card pad"><h3>封面</h3><div class="cover-edit">' +
@@ -669,6 +687,8 @@ pages.edit = async (app, id) => {
     c.instructor = f.instructor.value.trim();
     c.price = Math.max(0, +f.price.value || 0);
     c.originalPrice = Math.max(0, +f.originalPrice.value || 0);
+    c.freeFrom = f.freeFrom.value ? new Date(f.freeFrom.value).getTime() : 0;
+    c.freeUntil = f.freeUntil.value ? new Date(f.freeUntil.value).getTime() : 0;
     c.published = f.published.checked;
     c.thumb = [f.c1.value, f.c2.value, f.mark.value.trim()];
     c.description = f.description.value.trim();
@@ -727,6 +747,9 @@ pages.edit = async (app, id) => {
       if (!c.title) return toast('請輸入課程名稱');
       if (!lessonsOf(c).length) return toast('至少需要一個單元');
       if (lessonsOf(c).some((l) => !l.title)) return toast('請填寫所有單元的標題');
+      if (c.freeFrom && !c.freeUntil) return toast('請設定限時免費的結束時間');
+      if (c.freeUntil && c.freeFrom && c.freeUntil <= c.freeFrom) return toast('限時免費的結束時間必須晚於開始時間');
+      if (c.freeUntil && !c.price) return toast('設定限時免費時，售價請填一般價格（大於 0）；售價 0 代表永久免費');
       const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]));
       if (bad) return toast(`「${bad.title}」的 YouTube 網址格式不正確`);
       // 只保留還存在的單元的影片
