@@ -75,7 +75,9 @@ function youtubeEmbed(v) {
 
 const isVerified = () => !!(user && user.emailVerified);
 const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowerCase() === user.email.toLowerCase());
-const owns = (courseId) => isVerified() && (access.includes(courseId) || isAdmin());
+const isFree = (c) => !!c && !c.price;
+// 免費課程：登入（並驗證 Email）就能看；付費課程：需要開通
+const owns = (courseId) => isVerified() && (access.includes(courseId) || isAdmin() || isFree(findCourse(courseId)));
 
 /* ---------------- 學習進度（存在瀏覽器） ---------------- */
 function doneList(courseId) {
@@ -216,7 +218,7 @@ pages.home = (app) => {
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
       `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
-      `<div>${owns(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
+      `<div>${owns(c.id) && !isFree(c) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
   }
   app.querySelector('#chips').onclick = (e) => { if (e.target.dataset.cat) { cat = e.target.dataset.cat; draw(); } };
@@ -231,13 +233,15 @@ pages.course = (app, id) => {
   const mine = owns(c.id);
   let box;
   if (mine) {
-    box = `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p><a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
+    box = (isFree(c) ? `<p>${priceTag(c)}</p>` : `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
   } else if (!user) {
-    box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">登入以觀看</a>` +
-      `<p class="muted small">${c.price ? '已購買' : '已開通'}的學員請登入觀看課程。</p>`;
+    box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">${isFree(c) ? '免費登入觀看' : '登入以觀看'}</a>` +
+      `<p class="muted small">${isFree(c) ? '免費課程，登入後即可直接觀看。' : '已購買的學員請登入觀看課程。'}</p>`;
+  } else if (!isVerified()) {
+    box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/verify">請先驗證 Email</a>` +
+      '<p class="muted small">完成 Email 驗證後即可觀看。</p>';
   } else {
-    const contact = c.price ? CONFIG.contact : (CONFIG.freeContact || CONFIG.contact);
-    box = `<p>${priceTag(c)}</p><div class="notice">${esc(contact || '請聯繫我們開通課程。')}</div>` +
+    box = `<p>${priceTag(c)}</p><div class="notice">${esc(CONFIG.contact || '請聯繫我們開通課程。')}</div>` +
       `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`;
   }
 
@@ -353,7 +357,8 @@ pages.verify = (app) => {
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
-  const list = access.map(findCourse).filter(Boolean);
+  // 已開通的課程 + 所有免費課程
+  const list = visibleCourses().filter((c) => access.includes(c.id) || isFree(c) || isAdmin());
   app.innerHTML = '<div class="container"><h1>我的課程</h1>' + (list.length
     ? '<div class="grid">' + list.map((c) => {
         const p = progress(c);

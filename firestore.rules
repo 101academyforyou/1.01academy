@@ -32,12 +32,24 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // 免費課程：courses/{課程id} 的 price 為 0 且已上架
+    function isFreeCourse(courseId) {
+      let course = /databases/$(database)/documents/courses/$(courseId);
+      return exists(course)
+        && get(course).data.get('price', 1) == 0
+        && get(course).data.get('published', true) != false;
+    }
+
+    // 付費課程：access/{Email} 的 courses 裡有這門課
+    function isGranted(courseId) {
+      let me = /databases/$(database)/documents/access/$(request.auth.token.email.lower());
+      return exists(me) && courseId in get(me).data.courses;
+    }
+
     // courseVideos/{課程id} = { l1: 'YouTube 網址', l2: ... }
-    // 只有被開通該課程的學生和管理者讀得到；只有管理者能修改
+    // 管理者、免費課程的登入者、被開通的學生讀得到；只有管理者能修改
     match /courseVideos/{courseId} {
-      allow read: if isAdmin() || (signedInEmail()
-        && exists(/databases/$(database)/documents/access/$(request.auth.token.email.lower()))
-        && courseId in get(/databases/$(database)/documents/access/$(request.auth.token.email.lower())).data.courses);
+      allow read: if isAdmin() || (signedInEmail() && (isFreeCourse(courseId) || isGranted(courseId)));
       allow write: if isAdmin();
     }
 
