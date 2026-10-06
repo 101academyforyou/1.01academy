@@ -40,7 +40,12 @@ function thumb(c) {
 }
 
 function priceTag(c) {
-  if (!c.price) return '';
+  if (!c.price) {
+    // 原價 > 0、售價 0：顯示「限時免費」並劃掉原價
+    return c.originalPrice > 0
+      ? `<span class="price free">限時免費</span> <s class="muted small">${money(c.originalPrice)}</s>`
+      : '';
+  }
   return `<span class="price">${money(c.price)}</span>` +
     (c.originalPrice > c.price ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '');
 }
@@ -203,10 +208,11 @@ pages.course = (app, id) => {
     box = `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p><a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
   } else if (!user) {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">登入以觀看</a>` +
-      '<p class="muted small">已購買的學員請登入觀看課程。</p>';
+      `<p class="muted small">${c.price ? '已購買' : '已開通'}的學員請登入觀看課程。</p>`;
   } else {
-    box = `<p>${priceTag(c)}</p><div class="notice">${esc(CONFIG.contact || '請聯繫我們購買課程。')}</div>` +
-      `<p class="muted small">購買時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`;
+    const contact = c.price ? CONFIG.contact : (CONFIG.freeContact || CONFIG.contact);
+    box = `<p>${priceTag(c)}</p><div class="notice">${esc(contact || '請聯繫我們開通課程。')}</div>` +
+      `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`;
   }
 
   app.innerHTML = '<div class="container course-page">' +
@@ -328,7 +334,7 @@ pages.my = (app) => {
           `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%</p></div></a>`;
       }).join('') + '</div>'
     : '<div class="card pad"><p>目前還沒有開通的課程。</p>' +
-      `<p class="muted small">購買課程後，我們會用你的登入 Email（<strong>${esc(user.email)}</strong>）為你開通。</p>` +
+      `<p class="muted small">課程開通時，我們會用你的登入 Email（<strong>${esc(user.email)}</strong>）為你開通。</p>` +
       '<a href="#/" class="btn btn-sm">瀏覽課程</a></div>') + '</div>';
 };
 

@@ -15,5 +15,8 @@ window.SITE_CONFIG = {
   },
 
   // 學生想購買課程時，課程頁會顯示這段聯絡方式
-  contact: '來信 salimachchang@gmail.com 購買，付款後為你開通。'
+  contact: '來信 salimachchang@gmail.com 購買，付款後為你開通。',
+
+  // 免費課程（售價 0）顯示這段
+  freeContact: '限時免費！來信 salimachchang@gmail.com 索取觀看權限，我們會為你開通。'
 };
