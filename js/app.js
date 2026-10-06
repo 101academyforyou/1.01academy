@@ -19,9 +19,10 @@ const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const money = (n) => 'NT$' + n.toLocaleString('en-US');
-const clock = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+const clock = (s) => !s ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 const lessonsOf = (c) => c.chapters.flatMap((ch) => ch.lessons);
 const totalMinutes = (c) => Math.round(lessonsOf(c).reduce((s, l) => s + l.duration, 0) / 60);
+const minutesText = (c) => (totalMinutes(c) ? ` · ${totalMinutes(c)} 分鐘` : '');
 const findCourse = (id) => COURSES.find((c) => c.id === id);
 const go = (path) => { location.hash = '#' + path; };
 
@@ -39,6 +40,7 @@ function thumb(c) {
 }
 
 function priceTag(c) {
+  if (!c.price) return '';
   return `<span class="price">${money(c.price)}</span>` +
     (c.originalPrice > c.price ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '');
 }
@@ -166,10 +168,10 @@ pages.home = (app) => {
   app.innerHTML =
     '<section class="hero"><div class="container">' +
     '<h1>每天進步 <span class="grad">1%</span>，一年後強大 <span class="grad">37 倍</span></h1>' +
-    '<p class="muted">業界講師親自授課，開通後隨時觀看。</p>' +
+    '<p class="muted">課程開通後即可觀看</p>' +
     '<input class="input search" id="q" placeholder="搜尋課程…" aria-label="搜尋課程" />' +
     '</div></section>' +
-    '<section class="container"><div class="chips" id="chips">' +
+    `<section class="container"><div class="chips" id="chips"${CATEGORIES.length > 2 ? '' : ' hidden'}>` +
     CATEGORIES.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') +
     '</div><div class="grid" id="list"></div></section>';
 
@@ -181,7 +183,7 @@ pages.home = (app) => {
     app.querySelector('#list').innerHTML = list.length ? list.map((c) =>
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
       `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
-      `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)} · ${totalMinutes(c)} 分鐘</p>` +
+      `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
       `<div>${owns(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
   }
@@ -209,7 +211,7 @@ pages.course = (app, id) => {
   app.innerHTML = '<div class="container course-page">' +
     `<div><a href="#/" class="muted small">← 所有課程</a>` +
     `<h1>${esc(c.title)}</h1><p class="lead muted">${esc(c.subtitle)}</p>` +
-    `<p class="muted small">講師 ${esc(c.instructor)} · ${esc(c.level)} · ${lessonsOf(c).length} 個單元 · ${totalMinutes(c)} 分鐘</p>` +
+    `<p class="muted small">講師 ${esc(c.instructor)} · ${esc(c.level)} · ${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
     `<h2>課程介紹</h2><p>${esc(c.description)}</p>` +
     `<h2>你將學到</h2><ul class="checks">${c.outcomes.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` +
