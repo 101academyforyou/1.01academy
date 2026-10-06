@@ -7,19 +7,19 @@
  * 單元格式：['單元id', '單元標題', 秒數]
  *    「單元id」要和 Firebase courseVideos 裡的欄位名稱一致。
  */
-var CATEGORIES = ['全部', '課程'];
+var CATEGORIES = ['全部', '基因演算法'];
 
 var COURSES = [
   {
-    // ↓ 標題、介紹、價格請改成你的課程內容
-    id: 'course1', title: '1.01 Academy 課程', subtitle: '課程簡介（請修改）',
-    category: '課程', level: '入門', price: 0, originalPrice: 0, instructor: '1.01 Academy',
-    thumb: ['#0ea5e9', '#6366f1', '1.01'], trailer: '',
-    description: '課程介紹（請修改）。',
-    outcomes: ['學習重點一（請修改）', '學習重點二（請修改）'],
+    id: 'course1', title: '[基因演算法] 執行 DSMGA-II-TwoEdge 簡介',
+    subtitle: '#基因演算法 #GeneticAlgorithms #ModelBuildingGeneticAlgorithms',
+    category: '基因演算法', level: '入門', price: 0, originalPrice: 0, instructor: '1.01 Academy',
+    thumb: ['#10b981', '#6366f1', 'GA'], trailer: '',
+    description: '介紹如何執行 DSMGA-II-TwoEdge，一種建構模型的基因演算法（Model-Building Genetic Algorithm）。',
+    outcomes: ['認識 DSMGA-II-TwoEdge', '了解建構模型的基因演算法', '學會執行 DSMGA-II-TwoEdge'],
     chapters: [
       // 單元影片網址放在 Firebase：courseVideos / course1 / l1
-      { title: '課程內容', lessons: [['l1', '第 1 堂', 0]] }
+      { title: '課程內容', lessons: [['l1', '執行 DSMGA-II-TwoEdge 簡介', 0]] }
     ]
   }
 ];
