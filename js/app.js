@@ -77,10 +77,20 @@ function youtubeId(v) {
 // 已跳脫的文字中，把網址變成可點擊的連結
 const linkify = (html) => html.replace(/https?:\/\/[^\s<]+/g, (u) => `<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`);
 
+// Bunny Stream：接受後台的 play 或 embed 網址，回傳 [影片庫 ID, 影片 ID]
+function bunnyIds(v) {
+  const m = /^https:\/\/(?:iframe|player)\.mediadelivery\.net\/(?:embed|play)\/(\d+)\/([0-9a-f-]{36})/i.exec(String(v || '').trim());
+  return m ? [m[1], m[2]] : null;
+}
+
 // 上傳到 Firebase Storage 的影片（或其他 https 影片檔網址）
-const isFileVideo = (v) => /^https:\/\//.test(String(v || '').trim()) && !youtubeId(v);
+const isFileVideo = (v) => /^https:\/\//.test(String(v || '').trim()) && !youtubeId(v) && !bunnyIds(v);
 
 function youtubeEmbed(v) {
+  const bunny = bunnyIds(v);
+  if (bunny) {
+    return `<div class="video"><iframe src="https://iframe.mediadelivery.net/embed/${bunny[0]}/${bunny[1]}?autoplay=false&preload=true&responsive=true" title="課程影片" loading="lazy" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
+  }
   if (isFileVideo(v)) {
     return `<div class="video"><video src="${esc(v)}" controls playsinline preload="metadata" controlsList="nodownload" disablePictureInPicture oncontextmenu="return false"></video></div>`;
   }
@@ -672,7 +682,7 @@ pages.edit = async (app, id) => {
           (li < ch.lessons.length - 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="down" data-ci="${ci}" data-li="${li}">↓</button>` : '') +
           `<button type="button" class="btn btn-ghost btn-sm" data-act="del-l" data-ci="${ci}" data-li="${li}">刪除</button></span></div>` +
           `<label>單元標題<input class="input" data-l="title" data-ci="${ci}" data-li="${li}" value="${esc(l.title)}"/></label>` +
-          `<label>影片 <span class="muted small">貼上 YouTube 網址，或按「上傳影片檔」</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>影片 <span class="muted small">貼上 Bunny Stream 或 YouTube 網址，或按「上傳影片檔」</span><input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://iframe.mediadelivery.net/play/…"/></label>` +
           `<div class="upload-row"><label class="btn btn-ghost btn-sm">📤 上傳影片檔<input type="file" accept="video/*" data-upload="${esc(l.id)}" data-ci="${ci}" data-li="${li}" hidden/></label>` +
           `<span class="muted small" data-prog="${esc(l.id)}">${uploads[l.id] != null ? `上傳中 ${uploads[l.id]}%` : isFileVideo(videos[l.id]) ? '✓ 使用已上傳的影片檔' : ''}</span></div>` +
           `<label>單元說明 <span class="muted small">顯示在影片下方，網址會變成連結</span><textarea class="input textarea" rows="3" data-l="note" data-ci="${ci}" data-li="${li}">${esc(l.note || '')}</textarea></label></div>`
@@ -800,7 +810,7 @@ pages.edit = async (app, id) => {
       if (c.freeUntil && c.freeFrom && c.freeUntil <= c.freeFrom) return toast('限時免費的結束時間必須晚於開始時間');
       if (c.freeUntil && !c.price) return toast('設定限時免費時，售價請填一般價格（大於 0）；售價 0 代表永久免費');
       if (Object.keys(uploads).length) return toast('還有影片正在上傳，請等上傳完成再儲存');
-      const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]) && !isFileVideo(videos[l.id]));
+      const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]) && !bunnyIds(videos[l.id]) && !isFileVideo(videos[l.id]));
       if (bad) return toast(`「${bad.title}」的影片網址格式不正確`);
       // 只保留還存在的單元的影片
       const ids = lessonsOf(c).map((l) => l.id);

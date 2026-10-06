@@ -62,6 +62,7 @@ firestore.rules   ← 資料庫安全規則（貼到 Firebase）
 - 可以上傳封面照片（自動裁切成 960×540）、修改課程介紹、單元標題、單元說明與 YouTube 網址
 - 管理者可以觀看所有課程
 - **學生開通**：在「管理 → 學生開通」輸入學生的登入 Email、勾選付費課程即可開通；也可以修改或移除權限
+- **Bunny Stream**：在單元的「影片」欄位貼上 Bunny 影片的 play 或 embed 網址（`https://iframe.mediadelivery.net/play/…`），並在 Bunny 影片庫的安全設定只允許 `101academyforyou.github.io` 播放
 - **上傳影片檔**：在編輯課程的每個單元按「上傳影片檔」（存到 Firebase Storage，需 Blaze 方案並發布 `storage.rules`），或貼 YouTube 網址
 - **免費課程**（售價 0）：任何登入的學生都能直接觀看，不需要開通
 - **限時免費**：編輯課程時填入售價（大於 0）和限時免費的開始／結束時間。期間內登入的學生都能免費觀看，期間結束後恢復售價，需開通才能看（由 Firestore 規則以伺服器時間把關）
