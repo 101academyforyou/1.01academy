@@ -17,6 +17,7 @@ window.SITE_CONFIG = {
   // 學生想購買課程時，課程頁會顯示這段聯絡方式
   contact: '來信 salimachchang@gmail.com 購買，付款後為你開通。',
 
-  // 免費課程（售價 0）顯示這段
-  freeContact: '限時免費！來信 salimachchang@gmail.com 索取觀看權限，我們會為你開通。'
+  // 管理者 Email：登入後可在網站上編輯課程（右上角「管理」）
+  // ⚠️ 只改這裡不夠，也要同步修改 firestore.rules 裡的 isAdmin()，那裡才是真正的權限控管
+  admins: ['salimachchang@gmail.com']
 };

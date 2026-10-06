@@ -5,27 +5,52 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 已驗證 Email 的登入者，用來比對開通名單
+    // 已驗證 Email 的登入者
     function signedInEmail() {
       return request.auth != null
         && request.auth.token.email_verified == true
         && request.auth.token.email != null;
     }
 
-    // access/{學生 Email（小寫）} = { courses: ['react', 'figma'] }
-    // 學生只能讀自己的開通紀錄；只有你能在主控台修改
-    match /access/{email} {
-      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
-      allow write: if false;
+    // 管理者名單：要新增管理者，在清單裡加上他的 Email（全部小寫）
+    function isAdmin() {
+      return signedInEmail()
+        && request.auth.token.email.lower() in ['salimachchang@gmail.com'];
     }
 
-    // courseVideos/{課程id} = { l1: 'YouTube 影片 ID 或網址', l2: ... }
-    // 只有被開通該課程的學生讀得到
+    // courses/{課程id}：課程目錄（標題、介紹、封面、單元標題與說明）
+    // 任何人都能讀（首頁要顯示）；只有管理者能新增、修改、刪除
+    match /courses/{courseId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // access/{學生 Email（小寫）} = { courses: ['course1'] }
+    // 學生只能讀自己的開通紀錄；只有管理者能修改
+    match /access/{email} {
+      allow read: if (signedInEmail() && request.auth.token.email.lower() == email) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // 免費課程：courses/{課程id} 的 price 為 0 且已上架
+    function isFreeCourse(courseId) {
+      let course = /databases/$(database)/documents/courses/$(courseId);
+      return exists(course)
+        && get(course).data.get('price', 1) == 0
+        && get(course).data.get('published', true) != false;
+    }
+
+    // 付費課程：access/{Email} 的 courses 裡有這門課
+    function isGranted(courseId) {
+      let me = /databases/$(database)/documents/access/$(request.auth.token.email.lower());
+      return exists(me) && courseId in get(me).data.courses;
+    }
+
+    // courseVideos/{課程id} = { l1: 'YouTube 網址', l2: ... }
+    // 管理者、免費課程的登入者、被開通的學生讀得到；只有管理者能修改
     match /courseVideos/{courseId} {
-      allow read: if signedInEmail()
-        && exists(/databases/$(database)/documents/access/$(request.auth.token.email.lower()))
-        && courseId in get(/databases/$(database)/documents/access/$(request.auth.token.email.lower())).data.courses;
-      allow write: if false;
+      allow read: if isAdmin() || (signedInEmail() && (isFreeCourse(courseId) || isGranted(courseId)));
+      allow write: if isAdmin();
     }
 
     // 其他資料一律禁止
