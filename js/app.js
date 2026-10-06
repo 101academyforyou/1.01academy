@@ -203,7 +203,9 @@ pages.home = (app) => {
     '</div></section>' +
     `<section class="container"><div class="chips" id="chips"${categoriesOf().length > 2 ? '' : ' hidden'}>` +
     categoriesOf().map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') +
-    '</div><div class="grid" id="list"></div></section>';
+    '</div><div class="grid" id="list"></div></section>' +
+    '<section class="container home-faq"><h2>常見問題</h2>' + faqList(SITE_PAGES.faq.slice(0, 5)) +
+    '<p><a class="link" href="#/faq">查看全部常見問題 →</a></p></section>';
 
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
@@ -651,6 +653,21 @@ pages.edit = async (app, id) => {
   draw();
   bind();
 };
+
+/* ---------------- 說明頁：常見問題、隱私權政策、服務條款 ---------------- */
+const paragraphs = (t) => linkify(esc(t)).replace(/\n/g, '<br>');
+function faqList(items) {
+  return '<div class="faq">' + items.map(([q, a]) =>
+    `<details class="card"><summary>${esc(q)}</summary><div class="faq-a">${paragraphs(a)}</div></details>`).join('') + '</div>';
+}
+function infoPage(app, title, body) {
+  app.innerHTML = `<div class="container info-page"><a href="#/" class="muted small">← 回到首頁</a><h1>${title}</h1>${body}` +
+    `<p class="muted small">最後更新：${esc(SITE_PAGES.updated)} · 聯絡我們：<a class="link" href="mailto:${esc(SITE_PAGES.email)}">${esc(SITE_PAGES.email)}</a></p></div>`;
+}
+const sections = (list) => list.map(([h, t]) => `<h2>${esc(h)}</h2><p>${paragraphs(t)}</p>`).join('');
+pages.faq = (app) => infoPage(app, '常見問題', faqList(SITE_PAGES.faq));
+pages.privacy = (app) => infoPage(app, '隱私權政策', sections(SITE_PAGES.privacy));
+pages.terms = (app) => infoPage(app, '服務條款', sections(SITE_PAGES.terms));
 
 function notFound(app) {
   app.innerHTML = '<div class="container"><h1>找不到頁面</h1><p><a class="link" href="#/">回到首頁</a></p></div>';

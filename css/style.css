@@ -159,3 +159,20 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 @media (max-width: 640px) {
   .admin-row, .cover-edit { grid-template-columns: 1fr; }
 }
+
+/* 常見問題與說明頁 */
+.home-faq { margin-bottom: 24px; }
+.faq { display: grid; gap: 10px; }
+.faq details { padding: 0 18px; }
+.faq summary { cursor: pointer; padding: 14px 0; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: '+'; color: var(--muted); font-size: 18px; line-height: 1; }
+.faq details[open] summary::after { content: '−'; color: var(--primary); }
+.faq-a { padding: 0 0 16px; color: var(--muted); line-height: 1.8; }
+.info-page { max-width: 760px; padding-bottom: 32px; }
+.info-page h2 { font-size: 18px; margin: 28px 0 8px; }
+.info-page p { line-height: 1.9; }
+.info-page .faq { margin-top: 16px; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 8px; }
+.footer-links a:hover { color: var(--primary); }
+.footer p { margin: 0; }
