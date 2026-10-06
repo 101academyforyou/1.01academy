@@ -127,3 +127,4 @@ header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, v
 .video.empty { display: grid; place-items: center; color: #94a3b8; }
 code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: var(--soft); padding: 1px 6px; border-radius: 6px; }
 @media (max-width: 520px) { .user-name { display: none; } }
+[hidden] { display: none !important; }
