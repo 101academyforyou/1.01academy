@@ -225,6 +225,10 @@ pages.course = (app, id) => {
 pages.login = (app, _, query) => {
   const next = /^\/[^/]/.test(query.next || '') ? query.next : '/my';
   if (!configured) return setupNotice(app);
+  if (!fb) {
+    app.innerHTML = '<div class="container narrow"><h1>無法連線</h1><div class="card pad"><p>登入服務目前無法連線，請檢查網路後重新整理頁面。</p><button class="btn btn-sm" onclick="location.reload()">重新整理</button></div></div>';
+    return;
+  }
   if (user && isVerified()) return go(next);
   if (user) return pages.verify(app);
 

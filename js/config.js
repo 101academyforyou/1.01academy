@@ -6,12 +6,12 @@
  */
 window.SITE_CONFIG = {
   firebaseConfig: {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-    storageBucket: '',
-    messagingSenderId: '',
-    appId: ''
+    apiKey: 'AIzaSyAYqxTZVjg4XZhsXMsmHhFv8ASAmv8RfRU',
+    authDomain: 'academy-213ba.firebaseapp.com',
+    projectId: 'academy-213ba',
+    storageBucket: 'academy-213ba.firebasestorage.app',
+    messagingSenderId: '678711804375',
+    appId: '1:678711804375:web:fb897bd9b526426e018b92'
   },
 
   // 學生想購買課程時，課程頁會顯示這段聯絡方式
