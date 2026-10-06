@@ -15,6 +15,8 @@ let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
+let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
+let coursesFromDb = false;
 
 /* ---------------- 小工具 ---------------- */
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -23,7 +25,9 @@ const clock = (s) => !s ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStar
 const lessonsOf = (c) => c.chapters.flatMap((ch) => ch.lessons);
 const totalMinutes = (c) => Math.round(lessonsOf(c).reduce((s, l) => s + l.duration, 0) / 60);
 const minutesText = (c) => (totalMinutes(c) ? ` · ${totalMinutes(c)} 分鐘` : '');
-const findCourse = (id) => COURSES.find((c) => c.id === id);
+const findCourse = (id) => courses.find((c) => c.id === id);
+const visibleCourses = () => courses.filter((c) => c.published !== false || isAdmin());
+const categoriesOf = () => ['全部', ...new Set(visibleCourses().map((c) => c.category).filter(Boolean))];
 const go = (path) => { location.hash = '#' + path; };
 
 function toast(msg) {
@@ -36,6 +40,7 @@ function toast(msg) {
 }
 
 function thumb(c) {
+  if (c.cover) return `<div class="thumb"><img src="${esc(c.cover)}" alt="${esc(c.title)}"></div>`;
   return `<div class="thumb" style="background:linear-gradient(135deg,${esc(c.thumb[0])},${esc(c.thumb[1])})"><span>${esc(c.thumb[2])}</span></div>`;
 }
 
@@ -69,7 +74,8 @@ function youtubeEmbed(v) {
 }
 
 const isVerified = () => !!(user && user.emailVerified);
-const owns = (courseId) => isVerified() && access.includes(courseId);
+const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowerCase() === user.email.toLowerCase());
+const owns = (courseId) => isVerified() && (access.includes(courseId) || isAdmin());
 
 /* ---------------- 學習進度（存在瀏覽器） ---------------- */
 function doneList(courseId) {
@@ -99,10 +105,11 @@ async function initFirebase() {
   auth = a.getAuth(firebaseApp);
   auth.languageCode = 'zh-TW'; // 驗證信、重設密碼信使用繁體中文
   db = f.getFirestore(firebaseApp);
+  const coursesReady = loadCourses();
   return new Promise((resolve) => {
     a.onAuthStateChanged(auth, async (u) => {
       user = u;
-      accessReady = loadAccess();
+      accessReady = Promise.all([coursesReady, loadAccess()]);
       resolve();
       render();
     });
@@ -115,6 +122,20 @@ async function loadAccess() {
   try {
     const snap = await fb.getDoc(fb.doc(db, 'access', user.email.toLowerCase()));
     access = snap.exists() ? (snap.data().courses || []) : [];
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// 從 Firestore 讀取課程目錄；資料庫還沒有課程時，沿用 data.js
+async function loadCourses() {
+  try {
+    const snap = await fb.getDocs(fb.collection(db, 'courses'));
+    if (!snap.empty) {
+      courses = snap.docs.map((d) => ({ ...d.data(), id: d.id }))
+        .sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+      coursesFromDb = true;
+    }
   } catch (e) {
     console.error(e);
   }
@@ -153,7 +174,7 @@ function renderHeader() {
     '<nav>' +
     '<a href="#/">所有課程</a>' +
     (user
-      ? `<a href="#/my">我的課程</a><span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
+      ? `<a href="#/my">我的課程</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
@@ -180,13 +201,13 @@ pages.home = (app) => {
     '<p class="muted">課程開通後即可觀看</p>' +
     '<input class="input search" id="q" placeholder="搜尋課程…" aria-label="搜尋課程" />' +
     '</div></section>' +
-    `<section class="container"><div class="chips" id="chips"${CATEGORIES.length > 2 ? '' : ' hidden'}>` +
-    CATEGORIES.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') +
+    `<section class="container"><div class="chips" id="chips"${categoriesOf().length > 2 ? '' : ' hidden'}>` +
+    categoriesOf().map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('') +
     '</div><div class="grid" id="list"></div></section>';
 
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
-    const list = COURSES.filter((c) =>
+    const list = visibleCourses().filter((c) =>
       (cat === '全部' || c.category === cat) &&
       (!q || (c.title + c.subtitle + c.instructor).toLowerCase().includes(q)));
     app.querySelector('#list').innerHTML = list.length ? list.map((c) =>
@@ -204,7 +225,7 @@ pages.home = (app) => {
 // 課程介紹頁（公開）
 pages.course = (app, id) => {
   const c = findCourse(id);
-  if (!c) return notFound(app);
+  if (!c || (c.published === false && !isAdmin())) return notFound(app);
   const mine = owns(c.id);
   let box;
   if (mine) {
@@ -220,6 +241,7 @@ pages.course = (app, id) => {
 
   app.innerHTML = '<div class="container course-page">' +
     `<div><a href="#/" class="muted small">← 所有課程</a>` +
+    (isAdmin() ? ` · <a href="#/admin/${c.id}" class="link small">✎ 編輯此課程</a>` + (c.published === false ? ' <span class="tag">（未上架）</span>' : '') : '') +
     `<h1>${esc(c.title)}</h1><p class="lead muted">${esc(c.subtitle)}</p>` +
     `<p class="muted small">講師 ${esc(c.instructor)} · ${esc(c.level)} · ${lessonsOf(c).length} 個單元${minutesText(c)}</p>` +
     (c.trailer ? '<h2>課程預告</h2>' + youtubeEmbed(c.trailer) : '') +
@@ -395,6 +417,239 @@ pages.learn = async (app, id, query, lessonId) => {
     if (!isDone && i < all.length - 1) go(`/learn/${c.id}/${all[i + 1].id}`);
     else pages.learn(app, id, query, cur.id);
   };
+};
+
+/* ---------------- 管理者：編輯課程 ---------------- */
+const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+
+function adminGuard(app) {
+  if (!user) { go('/login?next=/admin'); return false; }
+  if (!isAdmin()) { notFound(app); return false; }
+  return true;
+}
+
+// 把圖片縮成 960×540（16:9 裁切）的 JPEG，存成文字放進資料庫
+async function resizeCover(file) {
+  const img = await createImageBitmap(file);
+  const W = 960, H = 540;
+  const canvas = Object.assign(document.createElement('canvas'), { width: W, height: H });
+  const scale = Math.max(W / img.width, H / img.height);
+  const w = img.width * scale, h = img.height * scale;
+  canvas.getContext('2d').drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+  let q = 0.85, url = canvas.toDataURL('image/jpeg', q);
+  while (url.length > 600000 && q > 0.4) { q -= 0.15; url = canvas.toDataURL('image/jpeg', q); }
+  return url;
+}
+
+// 課程列表
+pages.admin = async (app, id) => {
+  if (!adminGuard(app)) return;
+  if (id) return pages.edit(app, id);
+  app.innerHTML = '<div class="container"><div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
+    (coursesFromDb ? '' :
+      '<div class="card pad notice-card"><strong>第一次使用：請先匯入課程</strong><p class="muted small">目前的課程資料來自網站內建檔案。按下面的按鈕把課程匯入資料庫後，就能在網站上直接編輯。</p>' +
+      '<button class="btn btn-sm" id="import">匯入現有課程到資料庫</button></div>') +
+    '<div class="admin-list">' + courses.map((c, i) =>
+      `<div class="card admin-row">${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
+      `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}</p>` +
+      `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
+      `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
+      (coursesFromDb && i > 0 ? `<button class="btn btn-ghost btn-sm" data-up="${i}">↑ 往前</button>` : '') +
+      '</div></div></div>').join('') + '</div></div>';
+
+  const imp = app.querySelector('#import');
+  if (imp) imp.onclick = async () => {
+    imp.disabled = true; imp.textContent = '匯入中…';
+    try {
+      for (const [i, c] of courses.entries()) {
+        await fb.setDoc(fb.doc(db, 'courses', c.id), { ...c, published: c.published !== false, order: i, updatedAt: Date.now() });
+      }
+      await loadCourses();
+      toast('匯入完成，現在可以編輯課程了');
+      pages.admin(app);
+    } catch (e) { console.error(e); imp.disabled = false; imp.textContent = '匯入現有課程到資料庫'; toast('匯入失敗：' + (e.code || e.message) + '（請確認已更新 Firestore 規則）'); }
+  };
+  app.onclick = async (e) => {
+    const up = e.target.dataset && e.target.dataset.up;
+    if (up == null) return;
+    const i = +up;
+    [courses[i - 1], courses[i]] = [courses[i], courses[i - 1]];
+    try {
+      await Promise.all(courses.map((c, k) => fb.setDoc(fb.doc(db, 'courses', c.id), { order: k }, { merge: true })));
+      pages.admin(app);
+    } catch (err) { toast('排序失敗：' + (err.code || err.message)); }
+  };
+};
+
+// 編輯單一課程
+pages.edit = async (app, id) => {
+  const isNew = id === 'new';
+  const src = isNew ? null : findCourse(id);
+  if (!isNew && !src) return notFound(app);
+  if (!coursesFromDb) { toast('請先匯入課程到資料庫'); return go('/admin'); }
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+
+  // 工作副本
+  const c = isNew ? {
+    id: newId('c'), title: '', subtitle: '', category: '', level: '入門', price: 0, originalPrice: 0, instructor: '',
+    thumb: ['#0ea5e9', '#6366f1', '1.01'], cover: '', trailer: '', description: '', outcomes: [],
+    chapters: [{ title: '課程內容', lessons: [{ id: newId('l'), title: '', duration: 0, note: '' }] }],
+    published: false, order: courses.length
+  } : JSON.parse(JSON.stringify(src));
+  c.thumb = c.thumb || ['#0ea5e9', '#6366f1', '1.01'];
+  let videos = {};
+  if (!isNew) {
+    try { videos = { ...(await fb.getDoc(fb.doc(db, 'courseVideos', c.id))).data() }; } catch (e) { console.error(e); }
+  }
+  if (!document.body.contains(app)) return;
+
+  const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
+  const area = (label, name, val, rows = 4, hint = '') => `<label>${label}${hint ? ` <span class="muted small">${hint}</span>` : ''}<textarea class="input textarea" name="${name}" rows="${rows}">${esc(val)}</textarea></label>`;
+
+  function draw() {
+    app.innerHTML = `<div class="container editor"><a href="#/admin" class="muted small">← 課程管理</a><h1>${isNew ? '新增課程' : '編輯課程'}</h1>` +
+      '<form id="ed" novalidate>' +
+      '<div class="card pad"><h3>基本資訊</h3>' +
+      field('課程名稱', 'title', c.title, 'required') +
+      field('副標題', 'subtitle', c.subtitle) +
+      '<div class="two">' + field('分類', 'category', c.category) + field('程度', 'level', c.level) + '</div>' +
+      '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
+      '<div class="two">' + field('售價（0 = 免費）', 'price', c.price, 'type="number" min="0"') + field('原價（會顯示劃掉的價格，0 = 不顯示）', 'originalPrice', c.originalPrice, 'type="number" min="0"') + '</div>' +
+      `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label></div>` +
+
+      '<div class="card pad"><h3>封面</h3><div class="cover-edit">' +
+      `<div class="cover-preview" id="cover-prev">${thumb(c)}</div><div>` +
+      '<label>上傳封面照片 <span class="muted small">建議 16:9 橫向圖片，會自動裁切成 960×540</span><input class="input" type="file" accept="image/*" id="cover-file"/></label>' +
+      (c.cover ? '<button type="button" class="btn btn-ghost btn-sm" id="cover-remove">移除封面照片</button>' : '') +
+      '<p class="muted small">沒有封面照片時，會顯示下面的漸層色和文字：</p>' +
+      `<div class="two"><label>顏色 1<input class="input" type="color" name="c1" value="${esc(c.thumb[0])}"/></label><label>顏色 2<input class="input" type="color" name="c2" value="${esc(c.thumb[1])}"/></label></div>` +
+      field('封面文字', 'mark', c.thumb[2], 'maxlength="6"') +
+      '</div></div></div>' +
+
+      '<div class="card pad"><h3>課程介紹</h3>' +
+      area('課程介紹', 'description', c.description, 5) +
+      area('你將學到', 'outcomes', (c.outcomes || []).join('\n'), 4, '每行一項') +
+      field('公開預告片 YouTube 網址（可留空，任何人都看得到）', 'trailer', c.trailer || '') +
+      '</div>' +
+
+      '<div class="card pad"><div class="row-between"><h3>章節與單元</h3><button type="button" class="btn btn-ghost btn-sm" data-act="add-ch">＋ 新增章節</button></div>' +
+      '<p class="muted small">單元影片網址只有開通的學生和管理者看得到。</p>' +
+      c.chapters.map((ch, ci) =>
+        `<div class="ed-chapter"><div class="row-between"><input class="input" data-ch="${ci}" value="${esc(ch.title)}" placeholder="章節名稱"/>` +
+        `<button type="button" class="btn btn-ghost btn-sm" data-act="del-ch" data-ci="${ci}">刪除章節</button></div>` +
+        ch.lessons.map((l, li) =>
+          `<div class="ed-lesson"><div class="row-between"><strong class="small">單元 ${li + 1}</strong><span class="lesson-nav">` +
+          (li > 0 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="up" data-ci="${ci}" data-li="${li}">↑</button>` : '') +
+          (li < ch.lessons.length - 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="down" data-ci="${ci}" data-li="${li}">↓</button>` : '') +
+          `<button type="button" class="btn btn-ghost btn-sm" data-act="del-l" data-ci="${ci}" data-li="${li}">刪除</button></span></div>` +
+          `<label>單元標題<input class="input" data-l="title" data-ci="${ci}" data-li="${li}" value="${esc(l.title)}"/></label>` +
+          `<label>YouTube 影片網址<input class="input" data-l="video" data-ci="${ci}" data-li="${li}" value="${esc(videos[l.id] || '')}" placeholder="https://youtu.be/…"/></label>` +
+          `<label>單元說明 <span class="muted small">顯示在影片下方，網址會變成連結</span><textarea class="input textarea" rows="3" data-l="note" data-ci="${ci}" data-li="${li}">${esc(l.note || '')}</textarea></label></div>`
+        ).join('') +
+        `<button type="button" class="btn btn-ghost btn-sm" data-act="add-l" data-ci="${ci}">＋ 新增單元</button></div>`
+      ).join('') + '</div>' +
+
+      '<div class="editor-actions"><button class="btn" id="save">儲存</button>' +
+      (isNew ? '' : '<button type="button" class="btn btn-ghost" data-act="delete">刪除課程</button>') +
+      '</div></form></div>';
+  }
+
+  // 把表單內容寫回工作副本（重畫前呼叫，避免輸入內容遺失）
+  function collect() {
+    const f = app.querySelector('#ed');
+    if (!f) return;
+    c.title = f.title.value.trim();
+    c.subtitle = f.subtitle.value.trim();
+    c.category = f.category.value.trim();
+    c.level = f.level.value.trim();
+    c.instructor = f.instructor.value.trim();
+    c.price = Math.max(0, +f.price.value || 0);
+    c.originalPrice = Math.max(0, +f.originalPrice.value || 0);
+    c.published = f.published.checked;
+    c.thumb = [f.c1.value, f.c2.value, f.mark.value.trim()];
+    c.description = f.description.value.trim();
+    c.outcomes = f.outcomes.value.split('\n').map((t) => t.trim()).filter(Boolean);
+    c.trailer = f.trailer.value.trim();
+    f.querySelectorAll('[data-ch]').forEach((el) => { c.chapters[+el.dataset.ch].title = el.value.trim(); });
+    f.querySelectorAll('[data-l]').forEach((el) => {
+      const l = c.chapters[+el.dataset.ci].lessons[+el.dataset.li];
+      if (el.dataset.l === 'video') { if (el.value.trim()) videos[l.id] = el.value.trim(); else delete videos[l.id]; }
+      else l[el.dataset.l] = el.dataset.l === 'note' ? el.value.trim() : el.value.trim();
+    });
+  }
+
+  function bind() {
+    const f = app.querySelector('#ed');
+    const fileInput = app.querySelector('#cover-file');
+    fileInput.onchange = async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      try { collect(); c.cover = await resizeCover(file); draw(); bind(); toast('封面已更新，記得按「儲存」'); }
+      catch (e) { toast('無法讀取這張圖片'); }
+    };
+    const rm = app.querySelector('#cover-remove');
+    if (rm) rm.onclick = () => { collect(); c.cover = ''; draw(); bind(); };
+    ['c1', 'c2', 'mark'].forEach((n) => { f[n].oninput = () => { if (!c.cover) { collect(); app.querySelector('#cover-prev').innerHTML = thumb(c); } }; });
+
+    f.onclick = async (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      const act = b.dataset.act, ci = +b.dataset.ci, li = +b.dataset.li;
+      collect();
+      if (act === 'add-ch') c.chapters.push({ title: '新章節', lessons: [] });
+      if (act === 'del-ch') { if (!confirm('確定刪除這個章節和裡面的所有單元？')) return; c.chapters.splice(ci, 1); }
+      if (act === 'add-l') c.chapters[ci].lessons.push({ id: newId('l'), title: '', duration: 0, note: '' });
+      if (act === 'del-l') { if (!confirm('確定刪除這個單元？')) return; c.chapters[ci].lessons.splice(li, 1); }
+      if (act === 'up' || act === 'down') {
+        const ls = c.chapters[ci].lessons, j = act === 'up' ? li - 1 : li + 1;
+        [ls[li], ls[j]] = [ls[j], ls[li]];
+      }
+      if (act === 'delete') {
+        if (!confirm(`確定刪除「${src.title}」？此動作無法復原。`)) return;
+        try {
+          await fb.deleteDoc(fb.doc(db, 'courses', c.id));
+          await fb.deleteDoc(fb.doc(db, 'courseVideos', c.id));
+          courses = courses.filter((x) => x.id !== c.id);
+          toast('課程已刪除');
+          return go('/admin');
+        } catch (err) { return toast('刪除失敗：' + (err.code || err.message)); }
+      }
+      draw(); bind();
+    };
+
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      collect();
+      if (!c.title) return toast('請輸入課程名稱');
+      if (!lessonsOf(c).length) return toast('至少需要一個單元');
+      if (lessonsOf(c).some((l) => !l.title)) return toast('請填寫所有單元的標題');
+      const bad = lessonsOf(c).find((l) => videos[l.id] && !youtubeId(videos[l.id]));
+      if (bad) return toast(`「${bad.title}」的 YouTube 網址格式不正確`);
+      // 只保留還存在的單元的影片
+      const ids = lessonsOf(c).map((l) => l.id);
+      Object.keys(videos).forEach((k) => { if (!ids.includes(k)) delete videos[k]; });
+      const btn = app.querySelector('#save');
+      btn.disabled = true; btn.textContent = '儲存中…';
+      try {
+        const data = { ...c, updatedAt: Date.now() };
+        delete data.id;
+        await fb.setDoc(fb.doc(db, 'courses', c.id), data);
+        await fb.setDoc(fb.doc(db, 'courseVideos', c.id), videos);
+        videoCache[c.id] = { ...videos };
+        const i = courses.findIndex((x) => x.id === c.id);
+        if (i > -1) courses[i] = { ...c }; else courses.push({ ...c });
+        toast('已儲存');
+        go('/course/' + c.id);
+      } catch (err) {
+        console.error(err);
+        btn.disabled = false; btn.textContent = '儲存';
+        toast('儲存失敗：' + (err.code || err.message));
+      }
+    };
+  }
+
+  draw();
+  bind();
 };
 
 function notFound(app) {

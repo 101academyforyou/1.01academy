@@ -136,3 +136,26 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .lesson-nav { display: flex; gap: 8px; flex-wrap: wrap; }
 .lesson-note { border-top: 1px solid var(--border); line-height: 1.8; }
 .lesson-note h3 { margin: 0 0 8px; }
+
+/* 管理者：課程編輯 */
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.textarea { height: auto; padding: 10px 14px; line-height: 1.6; resize: vertical; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.check input { width: 18px; height: 18px; accent-color: var(--primary); }
+.notice-card { margin-bottom: 20px; border-color: var(--primary); }
+.admin-list { display: grid; gap: 14px; margin: 20px 0 40px; }
+.admin-row { display: grid; grid-template-columns: 200px 1fr; align-items: center; }
+.admin-row .pad p { margin: 4px 0 10px; }
+.editor { max-width: 860px; padding-bottom: 48px; }
+.editor .card { margin-bottom: 18px; }
+.editor h3 { margin: 0 0 14px; }
+.cover-edit { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
+.cover-preview { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.ed-chapter { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; background: var(--soft); }
+.ed-chapter > .row-between .input { flex: 1; margin-top: 0; }
+.ed-lesson { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
+.ed-lesson label { margin-bottom: 10px; }
+.editor-actions { display: flex; gap: 12px; justify-content: space-between; }
+@media (max-width: 640px) {
+  .admin-row, .cover-edit { grid-template-columns: 1fr; }
+}
