@@ -77,10 +77,10 @@ function youtubeId(v) {
 // 已跳脫的文字中，把網址變成可點擊的連結
 const linkify = (html) => html.replace(/https?:\/\/[^\s<]+/g, (u) => `<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`);
 
-// Bunny Stream：接受後台的 play 或 embed 網址，回傳 [影片庫 ID, 影片 ID]
+// Bunny Stream：接受後台的 play 或 embed 網址，回傳 [播放網域, 影片庫 ID, 影片 ID]
 function bunnyIds(v) {
-  const m = /^https:\/\/(?:iframe|player)\.mediadelivery\.net\/(?:embed|play)\/(\d+)\/([0-9a-f-]{36})/i.exec(String(v || '').trim());
-  return m ? [m[1], m[2]] : null;
+  const m = /^https:\/\/((?:iframe|player)\.mediadelivery\.net)\/(?:embed|play)\/(\d+)\/([0-9a-f-]{36})/i.exec(String(v || '').trim());
+  return m ? [m[1].toLowerCase(), m[2], m[3]] : null;
 }
 
 // 上傳到 Firebase Storage 的影片（或其他 https 影片檔網址）
@@ -89,7 +89,7 @@ const isFileVideo = (v) => /^https:\/\//.test(String(v || '').trim()) && !youtub
 function youtubeEmbed(v) {
   const bunny = bunnyIds(v);
   if (bunny) {
-    return `<div class="video"><iframe src="https://iframe.mediadelivery.net/embed/${bunny[0]}/${bunny[1]}?autoplay=false&preload=true&responsive=true" title="課程影片" loading="lazy" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
+    return `<div class="video"><iframe src="https://${bunny[0]}/embed/${bunny[1]}/${bunny[2]}?autoplay=false&preload=true&responsive=true" title="課程影片" loading="lazy" allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
   }
   if (isFileVideo(v)) {
     return `<div class="video"><video src="${esc(v)}" controls playsinline preload="metadata" controlsList="nodownload" disablePictureInPicture oncontextmenu="return false"></video></div>`;
