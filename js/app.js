@@ -218,7 +218,6 @@ pages.home = (app) => {
   app.innerHTML =
     '<section class="hero"><div class="container">' +
     '<h1>每天進步 <span class="grad">1%</span>，一年後成長 <span class="grad">37 倍</span></h1>' +
-    '<p class="muted">課程開通後即可觀看</p>' +
     '<input class="input search" id="q" placeholder="搜尋課程…" aria-label="搜尋課程" />' +
     '</div></section>' +
     `<section class="container"><div class="chips" id="chips"${categoriesOf().length > 2 ? '' : ' hidden'}>` +
