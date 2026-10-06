@@ -40,7 +40,12 @@ function thumb(c) {
 }
 
 function priceTag(c) {
-  if (!c.price) return '';
+  if (!c.price) {
+    // 原價 > 0、售價 0：顯示「限時免費」並劃掉原價
+    return c.originalPrice > 0
+      ? `<span class="price free">限時免費</span> <s class="muted small">${money(c.originalPrice)}</s>`
+      : '';
+  }
   return `<span class="price">${money(c.price)}</span>` +
     (c.originalPrice > c.price ? ` <s class="muted small">${money(c.originalPrice)}</s>` : '');
 }
