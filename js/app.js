@@ -58,6 +58,9 @@ function youtubeId(v) {
   return m ? m[1] : null;
 }
 
+// 已跳脫的文字中，把網址變成可點擊的連結
+const linkify = (html) => html.replace(/https?:\/\/[^\s<]+/g, (u) => `<a class="link" href="${u}" target="_blank" rel="noopener">${u}</a>`);
+
 function youtubeEmbed(v) {
   const id = youtubeId(v);
   return id
@@ -366,13 +369,18 @@ pages.learn = async (app, id, query, lessonId) => {
   const isDone = done.includes(cur.id);
 
   app.innerHTML = '<div class="player">' +
-    `<div>${youtubeEmbed(videos[cur.id])}` +
-    `<div class="pad"><p class="muted small">單元 ${i + 1} / ${all.length}</p><h2>${esc(cur.title)}</h2>` +
-    '<div class="row-between">' +
-    (i > 0 ? `<a class="btn btn-ghost" href="#/learn/${c.id}/${all[i - 1].id}">← 上一單元</a>` : '<span></span>') +
-    `<button class="btn ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
-    (i < all.length - 1 ? `<a class="btn btn-ghost" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '<span></span>') +
-    '</div></div></div>' +
+    '<div>' +
+    // 單元資訊與按鈕在影片上方
+    `<div class="pad lesson-head"><div><p class="muted small">單元 ${i + 1} / ${all.length}</p><h2>${esc(cur.title)}</h2></div>` +
+    '<div class="lesson-nav">' +
+    (i > 0 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i - 1].id}">← 上一單元</a>` : '') +
+    `<button class="btn btn-sm ${isDone ? 'btn-ghost' : ''}" id="done">${isDone ? '✓ 已完成' : '標記完成'}</button>` +
+    (i < all.length - 1 ? `<a class="btn btn-ghost btn-sm" href="#/learn/${c.id}/${all[i + 1].id}">下一單元 →</a>` : '') +
+    '</div></div>' +
+    youtubeEmbed(videos[cur.id]) +
+    // 單元說明（在 data.js 每個單元的第 4 個欄位填寫）
+    (cur.note ? `<div class="pad lesson-note"><h3>單元說明</h3><div>${linkify(esc(cur.note)).replace(/\n/g, '<br>')}</div></div>` : '') +
+    '</div>' +
     `<aside class="side"><div class="pad"><strong>${esc(c.title)}</strong><div class="bar"><i style="width:${progress(c)}%"></i></div>` +
     `<span class="muted small">進度 ${progress(c)}%</span></div>` +
     c.chapters.map((ch) => `<div class="side-ch">${esc(ch.title)}</div>` + ch.lessons.map((l) => {

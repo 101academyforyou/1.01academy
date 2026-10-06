@@ -128,3 +128,11 @@ header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, v
 code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: var(--soft); padding: 1px 6px; border-radius: 6px; }
 @media (max-width: 520px) { .user-name { display: none; } }
 [hidden] { display: none !important; }
+
+/* 上課頁：單元資訊在影片上方、說明在影片下方 */
+.lesson-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.lesson-head h2 { margin: 2px 0 0; }
+.lesson-head p { margin: 0; }
+.lesson-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+.lesson-note { border-top: 1px solid var(--border); line-height: 1.8; }
+.lesson-note h3 { margin: 0 0 8px; }
