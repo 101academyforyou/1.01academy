@@ -1,68 +1,105 @@
 # 1.01academy
 
-> 每天進步 1%，一年後強大 37 倍（1.01<sup>365</sup> ≈ 37.78）
+> 每天進步 1%，一年後強大 37 倍
 
-1.01 Academy 線上課程平台：學生可以瀏覽、購買並觀看課程，介面走清爽科技風格（支援深色模式與手機版）。
+放在 **GitHub Pages** 的線上課程網站。學生用 Google 或 Email 登入；你為學生開通課程後，學生就能在網站上觀看**不公開的 YouTube 影片**。
 
-## 快速開始
+- 課程目錄（標題、介紹、章節）公開，任何人都能瀏覽
+- 影片的 YouTube 連結存在 Firebase，**只有被開通該課程的學生**讀得到，不會出現在網站原始碼裡
+- 學生付款方式由你自訂（轉帳、LINE Pay 等），收到款項後在 Firebase 後台開通
 
-純前端，不需要建置工具。用任何靜態伺服器開啟即可：
+## 檔案
+
+```
+index.html        頁面外框
+css/style.css     樣式
+js/config.js      ← Firebase 設定、購買聯絡方式（部署前要填）
+js/data.js        ← 課程目錄（公開資訊，不要放影片連結）
+js/app.js         網站功能
+firestore.rules   ← 資料庫安全規則（貼到 Firebase）
+```
+
+---
+
+## 第一次設定（約 15 分鐘）
+
+### 1. 建立 Firebase 專案（免費）
+
+1. 前往 <https://console.firebase.google.com> → **新增專案**（Google Analytics 可以關閉）
+2. 專案首頁點 **「</>」（網頁）** 新增應用程式，暱稱隨意，不用勾選 Hosting
+3. 畫面會出現一段 `const firebaseConfig = { ... }`，把裡面的值複製到 `js/config.js`
+4. 順便把 `js/config.js` 裡的 `contact` 改成你的購買聯絡方式
+
+> `firebaseConfig` 本來就是設計成公開在網頁上的，放到 GitHub 沒問題。真正保護影片的是第 3 步的安全規則。
+
+### 2. 開啟登入功能
+
+1. 左側選單 **建構 → Authentication → 開始使用**
+2. **登入方式** 分頁：啟用 **Google** 與 **電子郵件/密碼**
+3. **設定 → 授權網域** → 新增 `101academyforyou.github.io`
+
+### 3. 建立資料庫並設定安全規則
+
+1. 左側選單 **建構 → Firestore Database → 建立資料庫**
+2. 位置選 `asia-east1 (台灣)`，模式選 **正式版模式**
+3. 到 **規則** 分頁，把整份 `firestore.rules` 的內容貼上，按 **發布**
+
+### 4. 開啟 GitHub Pages
+
+1. 把程式合併到 `main` 分支
+2. GitHub repo → **Settings → Pages**
+3. Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾 `/ (root)` → Save
+4. 約 1 分鐘後網站會出現在 <https://101academyforyou.github.io/1.01academy/>
+
+---
+
+## 日常操作
+
+### 新增課程
+
+1. 在 `js/data.js` 的 `COURSES` 裡複製一筆課程修改（課程 `id` 用英文，例如 `react`）。單元格式：`['單元id', '單元標題', 秒數]`
+2. 把影片上傳到 YouTube，瀏覽權限設為 **「不公開」**（不要選「私人」，私人影片無法嵌入網站）
+3. 到 Firestore 新增影片清單：
+   - 集合：`courseVideos`（第一次要按「開始集合」建立）
+   - 文件 ID：課程 id，例如 `react`
+   - 每個單元一個欄位：欄位名稱 = 單元 id（例如 `l1`），類型 `string`，值 = YouTube 網址或影片 ID
+
+```
+courseVideos / react
+  l1: "https://youtu.be/xxxxxxxxxxx"
+  l2: "https://www.youtube.com/watch?v=yyyyyyyyyyy"
+```
+
+### 為學生開通課程
+
+學生先在網站上註冊或登入一次，再把他的**登入 Email** 告訴你。
+
+到 Firestore：
+- 集合：`access`
+- 文件 ID：學生的 Email，**全部小寫**，例如 `student@gmail.com`
+- 欄位：`courses`，類型 `array`，每一項是一個 `string` 課程 id（例如 `react`）
+
+```
+access / student@gmail.com
+  courses: ["react", "figma"]
+```
+
+學生重新整理網頁就能看到課程。要加開其他課程，在同一個 array 再加一項；要取消權限，刪掉那一項或整份文件。
+
+> 用 Email/密碼註冊的學生要先點驗證信裡的連結，才能觀看課程。這是為了避免有人用別人的 Email 註冊來冒用權限。用 Google 登入不需要另外驗證。
+
+---
+
+## 本機預覽
 
 ```bash
 python3 -m http.server 8000
-# 或
-npx serve .
 ```
 
-打開 http://localhost:8000
+打開 <http://localhost:8000>。用本機測試登入時，要在 Firebase 授權網域加入 `localhost`（通常預設已經有）。
 
-**示範管理員帳號：** `admin@101academy.com` / `admin123`
+## 要知道的限制
 
-可直接部署到 GitHub Pages、Netlify、Vercel 等任何靜態網站主機。
-
-## 功能
-
-### 學生端
-- **首頁**：Hero、搜尋、熱門分類、精選 / 最新課程、平台特色、學員評價、FAQ
-- **課程目錄**：關鍵字搜尋、分類 / 程度 / 價格篩選、排序（熱門、評價、最新、價格），篩選條件會同步到網址
-- **課程頁**：課程介紹、學習成果、章節大綱、免費試看影片、講師介紹、評分分布與評價、優惠倒數、分享、收藏
-- **購物車**：移除、移至收藏、優惠碼（`WELCOME10`、`TECH500`、`LEARN101`）
-- **結帳**：購買人資料、電子發票（會員載具 / 手機條碼 / 統編 / 捐贈）、信用卡（含 Luhn 卡號驗證與卡面預覽）、LINE Pay、ATM 虛擬帳號
-- **訂單**：付款成功頁、ATM 轉帳資訊、訂單紀錄與明細、列印收據、取消待付款訂單
-- **會員**：註冊（密碼強度提示）、登入、帳號設定、變更密碼
-- **我的學習**：學習統計、進度條、依狀態篩選
-- **上課頁**：影片播放器（MP4 / YouTube）、章節清單、記住播放位置、看完 90% 自動標記完成、自動播放下一單元、影片時間點筆記
-- **結業證書**：完成 100% 後可檢視與列印 / 另存 PDF
-- **收藏清單**、免費課程一鍵加入、課程評價
-
-### 管理後台（`#/admin`）
-- **儀表板**：營收、訂單數、學員數、近 7 日營收圖、熱銷課程、最新訂單
-- **課程管理**：新增 / 編輯 / 刪除、上下架、精選、封面樣式、章節與單元編輯器（影片網址、時長、試看）
-- **訂單管理**：狀態篩選、ATM 確認入帳（自動開通課程）、退款（收回權限）、匯出 CSV
-- **會員管理**：切換角色、停用帳號
-- **優惠券**：新增百分比 / 固定金額優惠、最低消費門檻、啟用 / 停用
-
-## 專案結構
-
-```
-index.html
-css/style.css          設計系統（色彩變數、深淺色主題、RWD）
-js/ui.js               共用工具：格式化、圖示、Toast、Modal
-js/data.js             預設課程、講師、評價、優惠券
-js/store.js            資料層（目前使用 localStorage）
-js/components.js       頁首、頁尾、課程卡片
-js/views/*.js          各頁面
-js/app.js              Hash 路由
-```
-
-## 上線前須知
-
-目前是**示範模式**：所有資料存在瀏覽器的 localStorage，付款流程是模擬的，不會真的扣款。正式營運前要補上：
-
-1. **後端與資料庫**：資料讀寫都集中在 `js/store.js`，把裡面的函式改成呼叫 API 即可，介面不用改。
-2. **真實金流**：串接綠界 ECPay、藍新 NewebPay、TapPay 或 Stripe。付款結果要以後端收到的金流通知（webhook）為準，再開通課程。
-3. **密碼與登入**：在後端用 bcrypt 或 argon2 雜湊密碼，並用 session 或 JWT 管理登入。
-4. **影片保護**：使用 Mux、Cloudflare Stream、Vimeo 或 AWS（CloudFront 簽名網址 + HLS 加密），避免影片網址外流。
-5. **電子發票**：串接加值中心（例如綠界或 ezPay）開立發票。
-
-範例影片來自 Google 公開的測試影片。課程資料可在 `js/data.js` 修改，或直接在後台編輯。若要重置示範資料，請清除瀏覽器的 localStorage。
+- **「不公開」影片的本質**：網站只會把影片連結給已開通的學生。但學生在播放器上點 YouTube 標誌就能拿到原始網址，而任何拿到網址的人都能在 YouTube 上觀看。這點網站無法完全防止。如果需要更嚴格的保護，要改用 Vimeo（可限制只能在你的網域播放）或專門的影音平台。
+- 學習進度存在學生自己的瀏覽器，換裝置不會同步。
+- 網站沒有線上付款，開通是你在 Firebase 手動操作。
