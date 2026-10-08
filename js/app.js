@@ -14,6 +14,7 @@ let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
 let accessExp = {};      // 課程 id → 觀看期限（毫秒）；沒有 = 不限期限
+let announcements = [];  // 公告（新到舊）
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
@@ -135,7 +136,7 @@ async function initFirebase() {
   return new Promise((resolve) => {
     a.onAuthStateChanged(auth, async (u) => {
       user = u;
-      accessReady = Promise.all([coursesReady, loadAccess()]);
+      accessReady = Promise.all([coursesReady, loadAccess()]).then(loadAnnouncements);
       resolve();
       render();
     });
@@ -168,6 +169,33 @@ async function loadCourses() {
     console.error(e);
   }
 }
+
+// 讀取公告：「所有人」的公告 + 我能觀看的課程的公告（管理者讀全部）
+async function loadAnnouncements() {
+  if (!fb) return;
+  const col = fb.collection(db, 'announcements');
+  try {
+    let docs = [];
+    if (isAdmin()) {
+      docs = (await fb.getDocs(col)).docs;
+    } else {
+      const audiences = ['all', ...(isVerified() ? visibleCourses().filter((c) => owns(c.id)).map((c) => c.id) : [])];
+      const results = await Promise.allSettled(audiences.map((a) => fb.getDocs(fb.query(col, fb.where('audience', '==', a)))));
+      results.forEach((r) => { if (r.status === 'fulfilled') docs.push(...r.value.docs); });
+    }
+    const seen = new Set();
+    announcements = docs.filter((d) => !seen.has(d.id) && seen.add(d.id))
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch (e) {
+    console.error(e);
+    announcements = [];
+  }
+}
+// 已讀紀錄（存在瀏覽器）
+const seenKey = () => 'a101_seen_' + (user ? user.uid : 'guest');
+const lastSeen = () => { try { return Number(localStorage.getItem(seenKey())) || 0; } catch (e) { return 0; } };
+const unreadCount = () => announcements.filter((a) => (a.createdAt || 0) > lastSeen()).length;
 
 async function loadVideos(courseId) {
   if (videoCache[courseId]) return videoCache[courseId];
@@ -204,6 +232,7 @@ function renderHeader() {
     (user
       ? `<a href="#/my">我的課程</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
+    (configured ? `<a href="#/notifications" class="icon-btn bell" aria-label="公告${unreadCount() ? `（${unreadCount()} 則未讀）` : ''}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>${unreadCount() ? `<span class="badge">${unreadCount() > 9 ? '9+' : unreadCount()}</span>` : ''}</a>` : '') +
     '<button class="icon-btn" id="theme" aria-label="切換深淺色"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>' +
     '</nav></div>';
   const lo = document.getElementById('logout');
@@ -241,7 +270,7 @@ pages.home = (app) => {
       (!q || (c.title + c.subtitle + c.instructor).toLowerCase().includes(q)));
     app.querySelector('#list').innerHTML = list.length ? list.map((c) =>
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
-      `<span class="tag">${esc(c.category)} · ${esc(c.level)}</span>` +
+      `<span class="tag">${[c.category, c.level].filter(Boolean).map(esc).join(" · ")}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
       `<div>${isVerified() && granted(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
@@ -325,6 +354,73 @@ pages.order = async (app, id) => {
   }
   app.innerHTML = '<div class="container"><p class="muted">載入訂單中…</p></div>';
   check();
+};
+
+/* ---------------- 公告 ---------------- */
+const audienceName = (a) => (a === 'all' ? '所有人' : ((findCourse(a) || {}).title || a));
+
+pages.notifications = (app) => {
+  const seenBefore = lastSeen();
+  try { localStorage.setItem(seenKey(), String(Date.now())); } catch (e) {}
+  renderHeader(); // 清除未讀數字
+  app.innerHTML = '<div class="container narrow-wide"><h1>公告</h1>' + (announcements.length
+    ? announcements.map((a) =>
+        `<div class="card pad notice-item${(a.createdAt || 0) > seenBefore ? ' unread' : ''}">` +
+        `<div class="row-between"><strong>${esc(a.title)}</strong>${(a.createdAt || 0) > seenBefore ? '<span class="new-tag">新</span>' : ''}</div>` +
+        `<p class="muted small">${a.createdAt ? fmtTime(a.createdAt) : ''}${a.audience !== 'all' ? ' · ' + esc(audienceName(a.audience)) : ''}</p>` +
+        (a.body ? `<div class="notice-body">${paragraphs(a.body)}</div>` : '') + '</div>').join('')
+    : '<div class="card pad"><p class="muted">目前沒有公告。</p></div>') +
+    (user ? '' : '<p class="muted small">登入後可以看到你課程的專屬公告。</p>') + '</div>';
+};
+
+// 管理者：發布公告
+pages.announce = (app) => {
+  if (!adminGuard(app)) return;
+  function draw() {
+    app.innerHTML = '<div class="container editor">' + adminTabs('announce') + '<h1>公告</h1>' +
+      '<form class="card pad" id="ann" novalidate><h3>發布新公告</h3>' +
+      '<label>標題<input class="input" name="title" maxlength="80" required/></label>' +
+      '<label>內容 <span class="muted small">可換行，網址會變成連結</span><textarea class="input textarea" name="body" rows="5" maxlength="3000"></textarea></label>' +
+      '<label>發送對象<select class="input" name="audience"><option value="all">所有人</option>' +
+      courses.map((c) => `<option value="${esc(c.id)}">${esc(c.title)} 的學生</option>`).join('') + '</select></label>' +
+      '<button class="btn btn-sm">發布</button>' +
+      '<p class="muted small">學生打開網站時，右上角的 🔔 會顯示未讀數字。課程公告只有能觀看該課程的學生看得到。</p></form>' +
+      `<h2>已發布（${announcements.length}）</h2>` +
+      (announcements.length ? announcements.map((a) =>
+        `<div class="card pad notice-item"><div class="row-between"><strong>${esc(a.title)}</strong>` +
+        `<button type="button" class="btn btn-ghost btn-sm" data-del="${esc(a.id)}">刪除</button></div>` +
+        `<p class="muted small">${a.createdAt ? fmtTime(a.createdAt) : ''} · 對象：${esc(audienceName(a.audience))}</p>` +
+        (a.body ? `<div class="notice-body">${paragraphs(a.body)}</div>` : '') + '</div>').join('')
+        : '<p class="muted">還沒有公告。</p>') + '</div>';
+
+    const f = app.querySelector('#ann');
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const title = f.elements.title.value.trim();
+      if (!title) return toast('請輸入標題');
+      const data = { title, body: f.body.value.trim(), audience: f.audience.value, createdAt: Date.now() };
+      const btn = f.querySelector('button'); btn.disabled = true;
+      try {
+        const id = newId('n');
+        await fb.setDoc(fb.doc(db, 'announcements', id), data);
+        announcements.unshift({ id, ...data });
+        toast('公告已發布');
+        draw();
+      } catch (err) { btn.disabled = false; toast('發布失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    };
+    app.querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('確定刪除這則公告？')) return;
+        try {
+          await fb.deleteDoc(fb.doc(db, 'announcements', b.dataset.del));
+          announcements = announcements.filter((a) => a.id !== b.dataset.del);
+          toast('已刪除');
+          draw();
+        } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+      };
+    });
+  }
+  draw();
 };
 
 // 課程介紹頁（公開）
@@ -577,6 +673,7 @@ pages.admin = async (app, id) => {
   if (!adminGuard(app)) return;
   if (id === 'students') return pages.students(app);
   if (id === 'orders') return pages.orders(app);
+  if (id === 'announce') return pages.announce(app);
   if (id) return pages.edit(app, id);
   app.innerHTML = '<div class="container">' + adminTabs('courses') + '<div class="row-between"><h1>課程管理</h1><a class="btn btn-sm" href="#/admin/new">＋ 新增課程</a></div>' +
     (coursesFromDb ? '' :
@@ -618,7 +715,8 @@ pages.admin = async (app, id) => {
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a>` +
-  `<a class="chip${cur === 'orders' ? ' active' : ''}" href="#/admin/orders">訂單</a></div>`;
+  `<a class="chip${cur === 'orders' ? ' active' : ''}" href="#/admin/orders">訂單</a>` +
+  `<a class="chip${cur === 'announce' ? ' active' : ''}" href="#/admin/announce">公告</a></div>`;
 
 // 線上付款訂單列表
 pages.orders = async (app) => {
