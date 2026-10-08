@@ -62,6 +62,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // announcements/{公告id} = { title, body, audience: 'all' 或 課程id, createdAt }
+    // 'all'：所有人都能看；課程公告：只有能看這門課的學生（已開通且未到期，或免費課程）與管理者
+    // 只有管理者能發布、刪除
+    match /announcements/{id} {
+      allow read: if isAdmin()
+        || resource.data.audience == 'all'
+        || (signedInEmail() && (isGranted(resource.data.audience) || isFreeCourse(resource.data.audience)));
+      allow write: if isAdmin();
+    }
+
     // orders/{訂單編號}：線上付款訂單，由 Cloud Functions 建立與更新
     // 學生只能讀自己的訂單；管理者可讀全部；網頁端一律不能寫入
     match /orders/{orderId} {

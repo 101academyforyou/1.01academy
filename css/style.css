@@ -213,3 +213,13 @@ table.orders th { font-size: 12px; color: var(--muted); background: var(--soft);
 .grant-row .check { margin: 6px 0; }
 .grant-exp { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; }
 .grant-exp .input { width: auto; height: 36px; margin: 0; }
+
+/* 公告 */
+.bell { position: relative; text-decoration: none; }
+.bell .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #dc2626; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.narrow-wide { max-width: 720px; padding-bottom: 40px; }
+.notice-item { margin-bottom: 12px; }
+.notice-item.unread { border-color: var(--primary); }
+.notice-item p.muted { margin: 4px 0 8px; }
+.notice-body { line-height: 1.8; }
+.new-tag { font-size: 12px; font-weight: 700; color: #fff; background: #dc2626; border-radius: 6px; padding: 1px 8px; }
