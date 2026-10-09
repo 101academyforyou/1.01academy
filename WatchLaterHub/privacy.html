@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>隱私權政策｜WatchLaterHub</title>
-<meta name="description" content="WatchLaterHub Chrome 擴充功能的隱私權政策：存取哪些資料、如何使用，以及不會做的事。">
+<meta name="description" content="WatchLaterHub Chrome 擴充功能的隱私權政策：存取哪些資料、如何使用、採取哪些資料保護措施，以及不會做的事。">
 <link rel="canonical" href="https://onepointzeroone.org/WatchLaterHub/privacy.html">
 <link rel="icon" type="image/png" sizes="32x32" href="icon32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="icon16.png">
@@ -64,7 +64,7 @@ footer{margin-top:auto;border-top:1px solid #E1ECFA}
 <main>
 <article class="card">
 <h1>WatchLaterHub 隱私權政策</h1>
-<p class="updated">最後更新：2026 年 10 月 2 日</p>
+<p class="updated">最後更新：2026 年 10 月 9 日</p>
 <p class="lead">WatchLaterHub（以下稱「本擴充功能」）是一個 Chrome 新分頁擴充功能。本政策說明本擴充功能會存取哪些資料、如何使用，以及不會做的事。</p>
 
 <h2 id="data">一、本擴充功能存取的資料</h2>
@@ -79,6 +79,7 @@ footer{margin-top:auto;border-top:1px solid #E1ECFA}
 <tr><td>Chrome 書籤</td><td>顯示、新增、編輯、排序書籤</td><td>由 Chrome 管理，本擴充功能不另外保存</td></tr>
 <tr><td>Chrome 瀏覽紀錄（最近 30 筆網址與標題）</td><td>在「最近」面板列出近期瀏覽的網頁</td><td>只存在你的瀏覽器</td></tr>
 <tr><td>位置（只在你按「使用目前位置」時）</td><td>查詢當地天氣</td><td>只存在你的瀏覽器</td></tr>
+<tr><td>你電腦上已安裝的軟體清單與圖示（只在你安裝選用的「小幫手」程式後）</td><td>讓你從新分頁一鍵開啟常用軟體</td><td>只存在你的瀏覽器；小幫手本身沒有網路連線</td></tr>
 </tbody>
 </table>
 </div>
@@ -90,24 +91,42 @@ footer{margin-top:auto;border-top:1px solid #E1ECFA}
 <li><strong>Open-Meteo、BigDataCloud、OpenStreetMap Nominatim</strong>：查詢天氣與地名。只會送出經緯度或你輸入的城市名稱，不包含任何身分資訊。</li>
 <li><strong>YouTube oEmbed / 縮圖、Google 網站圖示服務</strong>：顯示影片標題、縮圖與網站圖示。</li>
 </ul>
+<p>選用的「小幫手」程式只在你自己的電腦上執行，透過 Chrome 的原生訊息機制（<code>nativeMessaging</code>）回報哪些軟體已安裝並負責開啟它們。它<strong>不具備任何網路連線能力</strong>，不會把資料送到本機以外的任何地方。</p>
 
-<h2 id="never">三、我們不會做的事</h2>
+<h2 id="security">三、資料保護措施（Data Protection）</h2>
+<p>本擴充功能採用以下措施保護你的資料，包含透過 Google API 取得的敏感資料（<code>youtube.readonly</code>）：</p>
+<ul>
+<li><strong>不集中保存，從源頭降低風險</strong>：本擴充功能<strong>沒有後端伺服器、沒有資料庫，也沒有任何雲端副本</strong>。所有資料只存在你自己裝置上的瀏覽器儲存區（<code>chrome.storage</code>），開發者在技術上無從存取、無從備份、也無從還原。</li>
+<li><strong>裝置端隔離</strong>：瀏覽器儲存區由 Chrome 依擴充功能來源隔離，只有本擴充功能讀得到，其他網站、其他擴充功能都無法讀取；資料同時受到你作業系統與使用者設定檔本身的存取控制保護。</li>
+<li><strong>傳輸加密</strong>：所有對外連線一律使用 HTTPS（TLS）加密通道，不使用未加密的 HTTP；本擴充功能亦不設置任何自有的資料接收端點。</li>
+<li><strong>存取權杖的保護</strong>：Google OAuth 存取權杖僅保存在瀏覽器的擴充功能儲存區（<code>chrome.storage.local</code>），網頁無法讀取，也不會寫入任何紀錄檔或傳送給開發者與第三方。授權流程在 Chrome 代管的視窗中完成（<code>chrome.identity</code>），權杖為短效憑證，到期後必須重新授權。</li>
+<li><strong>最小權限原則</strong>：僅以唯讀權限 <code>youtube.readonly</code> 讀取 YouTube 資料，無法新增、修改或刪除你 YouTube 帳號中的任何內容；另申請非敏感的 <code>email</code> 權限，僅用於在畫面上顯示目前登入的帳號。本擴充功能不會以其他途徑存取你的 YouTube 帳號。</li>
+<li><strong>最小蒐集與最短保留</strong>：YouTube API 的回應中，只保留影片 ID、標題與頻道名稱寫入儲存區，其餘欄位一律捨棄；不建立觀看紀錄、不累積歷史資料。</li>
+<li><strong>對第三方請求去識別化</strong>：查詢天氣與地名時只送出經緯度或你輸入的城市名稱，不附帶你的帳號、Email、權杖或任何可識別身分的資訊。</li>
+<li><strong>資安事件處理</strong>：若發生影響使用者資料的安全事件，將於本網站與 Chrome 線上應用程式商店說明頁公告，並於知悉後 72 小時內循可得之聯絡管道通知受影響的使用者。</li>
+</ul>
+
+<h2 id="never">四、我們不會做的事</h2>
 <ul>
 <li>不出售、不出租、不轉讓你的資料給任何第三方</li>
 <li>不把資料用於廣告、信用評估或與本擴充功能單一用途無關的目的</li>
 <li>不追蹤你的瀏覽行為、不做分析統計</li>
-<li>不存取你的 Gmail 或其他 Google 服務資料（只使用 YouTube 唯讀權限）</li>
+<li>不存取你的 Gmail、雲端硬碟或其他 Google 服務資料（只使用 YouTube 唯讀權限與顯示帳號用的 <code>email</code> 權限）</li>
+<li><strong>不讀取瀏覽器 cookie，也不會利用你在瀏覽器中既有的 YouTube 登入狀態存取你的帳號</strong>；所有 YouTube 資料一律經由官方 YouTube Data API、以你明確授權的權限範圍取得</li>
+<li><strong>不將透過 Google API 取得的使用者資料用於開發、改進或訓練一般化的人工智慧／機器學習模型</strong></li>
+<li>不以人工方式讀取你的資料（除非你明確同意、為資安或法遵所必需，或資料已完全去識別化）</li>
 </ul>
-<p class="note">本擴充功能使用 Google API 取得的資料，遵守 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API 服務使用者資料政策</a>，包括「有限使用」（Limited Use）規範。</p>
+<p class="note">WatchLaterHub 對透過 Google API 取得之資訊的使用與轉移，均遵守 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API 服務使用者資料政策</a>，包括其中的「有限使用」（Limited Use）規範。</p>
 
-<h2 id="delete">四、刪除資料與撤銷授權</h2>
+<h2 id="delete">五、資料保留、刪除與撤銷授權</h2>
 <ul>
+<li><strong>保留期間</strong>：資料僅在你授權並使用本擴充功能期間保留於你的裝置上，不設額外的保存期限，也沒有任何雲端備份。</li>
 <li>在「收藏」視窗按「登出」，會撤銷 Google 授權並刪除權杖</li>
-<li>移除本擴充功能，會刪除它存在瀏覽器裡的所有資料</li>
+<li>移除本擴充功能，會一併刪除它存在瀏覽器裡的所有資料，且無法由開發者還原</li>
 <li>你也可以隨時到 <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google 帳戶權限頁面</a> 撤銷授權</li>
 </ul>
 
-<h2 id="contact">五、聯絡方式</h2>
+<h2 id="contact">六、聯絡方式</h2>
 <p>有任何問題，請到 GitHub Issues 回報，或寄信至：<a href="mailto:salimachchang@gmail.com">salimachchang@gmail.com</a></p>
 </article>
 </main>
