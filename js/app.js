@@ -14,6 +14,9 @@ let auth = null, db = null, fbApp = null;
 let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
 let accessExp = {};      // 課程 id → 觀看期限（毫秒）；沒有 = 不限期限
+let joined = [];         // 已加入的免費課程 id（從課程頁按「加入課程」）
+let notes = [];          // 筆記目錄（notes 集合）
+let ownedNotes = [];     // 已購買的筆記 id（access/{Email} 的 notes）
 let accessReady = Promise.resolve();
 const videoCache = {};   // 課程 id → { 單元 id: YouTube ID }
 let courses = COURSES;   // 課程目錄：優先讀 Firestore 的 courses 集合，讀不到時用 data.js
@@ -28,7 +31,10 @@ const totalMinutes = (c) => Math.round(lessonsOf(c).reduce((s, l) => s + l.durat
 const minutesText = (c) => (totalMinutes(c) ? ` · ${totalMinutes(c)} 分鐘` : '');
 const findCourse = (id) => courses.find((c) => c.id === id);
 const visibleCourses = () => courses.filter((c) => c.published !== false || isAdmin());
-const categoriesOf = () => ['全部', ...new Set(visibleCourses().map((c) => c.category).filter(Boolean))];
+// 首頁列出的課程：不公開（只能用連結進入）的課程只有管理者看得到
+const listedCourses = () => visibleCourses().filter((c) => !c.unlisted || isAdmin());
+const categoriesOf = () => ['全部', ...new Set(listedCourses().map((c) => c.category).filter(Boolean))];
+const courseLink = (id) => location.origin + location.pathname + '#/course/' + id;
 const go = (path) => { location.hash = '#' + path; };
 
 function toast(msg) {
@@ -95,13 +101,18 @@ const isVerified = () => !!(user && user.emailVerified);
 const isAdmin = () => isVerified() && (CONFIG.admins || []).some((e) => e.toLowerCase() === user.email.toLowerCase());
 // 免費：售價 0（永久免費）或在限時免費期間內
 const isFree = (c) => !!c && (!c.price || inFreeWindow(c));
-// 免費課程：登入（並驗證 Email）就能看；付費課程：需要開通
+// 免費課程：登入（並驗證 Email）後在課程頁按「加入課程」才能看，每門課分開加入；付費課程：需要開通
 // 付費課程觀看期限：購買後一年
 const oneYearFrom = (ms) => { const d = new Date(ms); d.setFullYear(d.getFullYear() + 1); return d.getTime(); };
 const expiryOf = (id) => Number(accessExp[id]) || 0;
 const granted = (id) => access.includes(id) && (!expiryOf(id) || expiryOf(id) > Date.now());
 const expired = (id) => access.includes(id) && !!expiryOf(id) && expiryOf(id) <= Date.now();
-const owns = (courseId) => isVerified() && (granted(courseId) || isAdmin() || isFree(findCourse(courseId)));
+const hasJoined = (id) => joined.includes(id);
+const owns = (courseId) => isVerified() && (granted(courseId) || isAdmin() || (isFree(findCourse(courseId)) && hasJoined(courseId)));
+// 筆記：售價 0 = 登入即可領取；付費筆記購買後永久可看
+const findNote = (id) => notes.find((n) => n.id === id);
+const visibleNotes = () => notes.filter((n) => n.published !== false || isAdmin());
+const ownsNote = (id) => isVerified() && (isAdmin() || ownedNotes.includes(id) || !(findNote(id) || {}).price);
 
 /* ---------------- 學習進度（存在瀏覽器） ---------------- */
 function doneList(courseId) {
@@ -131,7 +142,7 @@ async function initFirebase() {
   auth = a.getAuth(firebaseApp);
   auth.languageCode = 'zh-TW'; // 驗證信、重設密碼信使用繁體中文
   db = f.getFirestore(firebaseApp);
-  const coursesReady = loadCourses();
+  const coursesReady = Promise.all([loadCourses(), loadNotes()]);
   return new Promise((resolve) => {
     a.onAuthStateChanged(auth, async (u) => {
       user = u;
@@ -145,11 +156,42 @@ async function initFirebase() {
 async function loadAccess() {
   access = [];
   accessExp = {};
+  joined = [];
+  ownedNotes = [];
   if (!isVerified()) return;
+  const email = user.email.toLowerCase();
+  await Promise.all([
+    fb.getDoc(fb.doc(db, 'access', email)).then((snap) => {
+      access = snap.exists() ? (snap.data().courses || []) : [];
+      accessExp = snap.exists() ? (snap.data().expires || {}) : {};
+      ownedNotes = snap.exists() ? (snap.data().notes || []) : [];
+    }).catch((e) => console.error(e)),
+    // enroll/{Email}/courses/{課程id}：學生自己加入的免費課程
+    fb.getDocs(fb.collection(db, 'enroll', email, 'courses')).then((snap) => {
+      joined = snap.docs.map((d) => d.id);
+    }).catch((e) => console.error(e))
+  ]);
+}
+
+// 加入免費課程（每門課分開加入）
+async function joinCourse(c, btn) {
+  btn.disabled = true;
   try {
-    const snap = await fb.getDoc(fb.doc(db, 'access', user.email.toLowerCase()));
-    access = snap.exists() ? (snap.data().courses || []) : [];
-    accessExp = snap.exists() ? (snap.data().expires || {}) : {};
+    await fb.setDoc(fb.doc(db, 'enroll', user.email.toLowerCase(), 'courses', c.id), { joinedAt: Date.now() });
+    if (!joined.includes(c.id)) joined.push(c.id);
+    toast('已加入課程');
+    go('/learn/' + c.id);
+  } catch (err) {
+    btn.disabled = false;
+    toast('加入失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）');
+  }
+}
+
+// 筆記目錄（公開）
+async function loadNotes() {
+  try {
+    const snap = await fb.getDocs(fb.collection(db, 'notes'));
+    notes = snap.docs.map((d) => ({ ...d.data(), id: d.id })).sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
   } catch (e) {
     console.error(e);
   }
@@ -201,6 +243,7 @@ function renderHeader() {
     '<a href="#/" class="logo"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M12 2.5C8.6 7 5 11.3 5 15a7 7 0 0 0 14 0c0-3.7-3.6-8-7-12.5z"/><path fill="none" stroke="rgba(79,70,229,.45)" stroke-width="1.6" stroke-linecap="round" d="M9 15.2a3 3 0 0 0 2.6 2.9"/></svg></span>1.01 Academy</a>' +
     '<nav>' +
     '<a href="#/">所有課程</a>' +
+    (visibleNotes().length ? '<a href="#/notes">筆記</a>' : '') +
     (user
       ? `<a href="#/my">我的課程</a>${isAdmin() ? '<a href="#/admin">管理</a>' : ''}<span class="muted small user-name" title="${esc(user.email)}">${esc(name)}</span><button class="link" id="logout">登出</button>`
       : '<a href="#/login" class="btn btn-sm">登入</a>') +
@@ -236,14 +279,14 @@ pages.home = (app) => {
 
   function draw() {
     app.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('active', b.dataset.cat === cat));
-    const list = visibleCourses().filter((c) =>
+    const list = listedCourses().filter((c) =>
       (cat === '全部' || c.category === cat) &&
       (!q || (c.title + c.subtitle + c.instructor).toLowerCase().includes(q)));
     app.querySelector('#list').innerHTML = list.length ? list.map((c) =>
       `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad">` +
-      `<span class="tag">${[c.category, c.level].filter(Boolean).map(esc).join(" · ")}</span>` +
+      `<span class="tag">${[c.category, c.level, c.unlisted ? '不公開' : ''].filter(Boolean).map(esc).join(" · ")}</span>` +
       `<h3>${esc(c.title)}</h3><p class="muted small">${esc(c.instructor)}${minutesText(c)}</p>` +
-      `<div>${isVerified() && granted(c.id) ? '<span class="owned">✓ 已開通</span>' : priceTag(c)}</div></div></a>`
+      `<div>${isVerified() && granted(c.id) ? '<span class="owned">✓ 已開通</span>' : isVerified() && isFree(c) && hasJoined(c.id) ? '<span class="owned">✓ 已加入</span>' : priceTag(c)}</div></div></a>`
     ).join('') : '<p class="muted">找不到符合的課程。</p>';
   }
   app.querySelector('#chips').onclick = (e) => { if (e.target.dataset.cat) { cat = e.target.dataset.cat; draw(); } };
@@ -256,14 +299,15 @@ pages.home = (app) => {
 const payEnabled = () => CONFIG.onlinePayment === true || (CONFIG.onlinePayment === 'admin' && isAdmin());
 
 // 呼叫 Cloud Function 建立訂單，再把表單送到綠界付款頁
-async function startPayment(c, btn) {
+// kind：'course'（課程）或 'note'（筆記）
+async function startPayment(c, btn, kind = 'course') {
   btn.dataset.label = btn.textContent;
   btn.disabled = true;
   btn.textContent = '正在前往付款頁…';
   try {
     const fn = await import(FIREBASE + 'firebase-functions.js');
     const createOrder = fn.httpsCallable(fn.getFunctions(fbApp, 'asia-east1'), 'createOrder');
-    const { data } = await createOrder({ courseId: c.id });
+    const { data } = await createOrder(kind === 'note' ? { noteId: c.id } : { courseId: c.id });
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = data.action;
@@ -295,13 +339,21 @@ pages.order = async (app, id) => {
     catch (e) { console.error(e); }
     if (!document.body.contains(app)) return;
     if (!o) { app.innerHTML = '<div class="container narrow"><h1>找不到訂單</h1><div class="card pad"><p>請確認登入的帳號與付款時相同。</p><a class="btn btn-sm" href="#/">回到首頁</a></div></div>'; return; }
-    const c = findCourse(o.courseId);
+    const isNote = o.kind === 'note';
+    const c = isNote ? null : findCourse(o.courseId);
+    const back = isNote ? `<a class="btn btn-sm" href="#/note/${esc(o.noteId)}">回到筆記頁</a>` : (c ? `<a class="btn btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '');
     const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
-    const info = '<dl class="order-info">' + row('訂單編號', `<span class="mono">${esc(id)}</span>`) + row('課程', esc(o.courseTitle || o.courseId)) +
+    const info = '<dl class="order-info">' + row('訂單編號', `<span class="mono">${esc(id)}</span>`) + row(isNote ? '筆記' : '課程', esc(o.courseTitle || o.courseId || o.noteId)) +
       row('金額', money(o.amount)) + row('狀態', esc(ORDER_STATUS[o.status] || o.status)) + '</dl>';
     if (o.status === 'paid') {
       accessReady = loadAccess();
       await accessReady;
+      if (isNote) {
+        app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
+          '<p>筆記已經為你開通，可以隨時到「我的課程」的「我的筆記」打開。</p>' +
+          `<a class="btn btn-block" href="#/note/${esc(o.noteId)}">打開筆記</a></div></div>`;
+        return;
+      }
       app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
         '<p>課程已經為你開通，現在就可以開始上課！</p>' +
         (expiryOf(o.courseId) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(o.courseId))}</p>` : '') +
@@ -315,13 +367,13 @@ pages.order = async (app, id) => {
           ? '<p class="muted">正在等待綠界的付款通知，通常幾秒鐘內就會完成，請稍候。</p>'
           : '<p class="muted">還沒收到付款結果。如果你選擇 ATM 轉帳或超商代碼，完成繳費後才會自動開通；已經付款卻沒有開通，請來信並提供訂單編號。</p>') +
         `<p class="muted small">有問題請來信 ${esc(SITE_PAGES.email)}，並附上訂單編號。</p>` +
-        (c ? `<a class="btn btn-ghost btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '') + '</div></div>';
+        back.replace('class="btn btn-sm"', 'class="btn btn-ghost btn-sm"') + '</div></div>';
       if (tries < 40) setTimeout(check, 3000);
       return;
     }
     app.innerHTML = '<div class="container narrow"><h1>付款未完成</h1><div class="card pad">' + info +
-      '<p>這筆訂單沒有付款成功，課程尚未開通。你可以回到課程頁重新付款。</p>' +
-      (c ? `<a class="btn btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '') + '</div></div>';
+      `<p>這筆訂單沒有付款成功，${isNote ? '筆記' : '課程'}尚未開通。你可以回到${isNote ? '筆記' : '課程'}頁重新付款。</p>` +
+      back + '</div></div>';
   }
   app.innerHTML = '<div class="container"><p class="muted">載入訂單中…</p></div>';
   check();
@@ -335,13 +387,18 @@ pages.course = (app, id) => {
   let box;
   if (mine) {
     box = (granted(c.id) || isAdmin() ? `<p class="owned">✓ 已開通（進度 ${progress(c)}%）</p>` +
-      (granted(c.id) && expiryOf(c.id) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(c.id))}</p>` : '') : `<p>${priceTag(c)}</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
+      (granted(c.id) && expiryOf(c.id) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(c.id))}</p>` : '')
+      : `<p>${priceTag(c)}</p><p class="owned">✓ 已加入（進度 ${progress(c)}%）</p>`) + `<a class="btn btn-block" href="#/learn/${c.id}">${progress(c) ? '繼續學習' : '開始上課'}</a>`;
   } else if (!user) {
-    box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">${isFree(c) ? '免費登入觀看' : '登入以觀看'}</a>` +
-      `<p class="muted small">${isFree(c) ? '免費課程，登入後即可直接觀看。' : '已購買的學員請登入觀看課程。'}</p>`;
+    box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/login?next=/course/${c.id}">${isFree(c) ? '登入並免費加入' : '登入以觀看'}</a>` +
+      `<p class="muted small">${isFree(c) ? '免費課程，登入後按「加入課程」即可觀看。' : '已購買的學員請登入觀看課程。'}</p>`;
   } else if (!isVerified()) {
     box = `<p>${priceTag(c)}</p><a class="btn btn-block" href="#/verify">請先驗證 Email</a>` +
       '<p class="muted small">完成 Email 驗證後即可觀看。</p>';
+  } else if (isFree(c)) {
+    box = `<p>${priceTag(c)}</p><button class="btn btn-block" id="join">＋ 免費加入課程</button>` +
+      '<p class="muted small">加入後這門課會出現在「我的課程」，可以隨時觀看。</p>' +
+      (inFreeWindow(c) ? `<p class="muted small">限時免費至 ${fmtTime(c.freeUntil)}，期間結束後需購買才能繼續觀看。</p>` : '');
   } else {
     box = `<p>${priceTag(c)}</p>` +
       (expired(c.id) ? `<div class="notice">你的觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期，重新購買即可再觀看一年。</div>` : '') +
@@ -373,6 +430,8 @@ pages.course = (app, id) => {
   }
   const payBtn = app.querySelector('#pay');
   if (payBtn) payBtn.onclick = () => startPayment(c, payBtn);
+  const joinBtn = app.querySelector('#join');
+  if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
 };
 
 // 登入 / 註冊
@@ -471,23 +530,33 @@ pages.verify = (app) => {
 pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
-  // 已開通的課程 + 所有免費課程 + 已到期的課程（可重新購買）
-  const list = visibleCourses().filter((c) => access.includes(c.id) || isFree(c) || isAdmin());
+  // 已開通的課程 + 已加入的免費課程 + 已到期的課程（可重新購買）
+  const list = visibleCourses().filter((c) => access.includes(c.id) || hasJoined(c.id) || isAdmin());
   app.innerHTML = '<div class="container"><h1>我的課程</h1>' + (list.length
     ? '<div class="grid">' + list.map((c) => {
         const p = progress(c);
         if (!owns(c.id)) {
           return `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
-            `<p class="expired small">觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期</p><p class="muted small">點這裡重新購買</p></div></a>`;
+            (expired(c.id)
+              ? `<p class="expired small">觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期</p><p class="muted small">點這裡重新購買</p>`
+              : '<p class="expired small">限時免費已結束</p><p class="muted small">點這裡查看購買方式</p>') + '</div></a>';
         }
         return `<a class="card course" href="#/learn/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
           `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%` +
           (granted(c.id) && expiryOf(c.id) ? ` · 觀看期限至 ${fmtTime(expiryOf(c.id))}` : '') + '</p></div></a>';
       }).join('') + '</div>'
     : '<div class="card pad"><p>目前還沒有開通的課程。</p>' +
-      `<p class="muted small">課程開通時，我們會用你的登入 Email（<strong>${esc(user.email)}</strong>）為你開通。</p>` +
-      '<a href="#/" class="btn btn-sm">瀏覽課程</a></div>') + '</div>';
+      `<p class="muted small">免費課程請到課程頁按「免費加入課程」；付費課程會用你的登入 Email（<strong>${esc(user.email)}</strong>）開通。</p>` +
+      '<a href="#/" class="btn btn-sm">瀏覽課程</a></div>') + myNotes() + '</div>';
 };
+
+// 我的課程頁下方：我的筆記（已購買的付費筆記；免費筆記在筆記區直接打開）
+function myNotes() {
+  const mine = visibleNotes().filter((n) => ownedNotes.includes(n.id));
+  if (!mine.length) return '';
+  return '<h2>我的筆記</h2><div class="grid">' + mine.map((n) =>
+    `<a class="card course" href="#/note/${esc(n.id)}">${thumb(n)}<div class="pad"><h3>${esc(n.title)}</h3><p class="owned">✓ 已購買</p></div></a>`).join('') + '</div>';
+}
 
 // 上課頁：從 Firestore 讀取不公開的 YouTube 影片 ID
 pages.learn = async (app, id, query, lessonId) => {
@@ -498,7 +567,9 @@ pages.learn = async (app, id, query, lessonId) => {
   if (!owns(c.id)) {
     app.innerHTML = expired(c.id)
       ? `<div class="container narrow"><h1>觀看期限已到期</h1><div class="card pad"><p>你的觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期，重新購買即可再觀看一年。</p><a class="btn btn-sm" href="#/course/${c.id}">重新購買</a></div></div>`
-      : `<div class="container narrow"><h1>尚未開通</h1><div class="card pad"><p>你還沒有這門課程的觀看權限。</p><a class="btn btn-sm" href="#/course/${c.id}">查看購買方式</a></div></div>`;
+      : isFree(c)
+        ? `<div class="container narrow"><h1>尚未加入</h1><div class="card pad"><p>這是免費課程，請先到課程頁按「免費加入課程」。</p><a class="btn btn-sm" href="#/course/${c.id}">前往課程頁</a></div></div>`
+        : `<div class="container narrow"><h1>尚未開通</h1><div class="card pad"><p>你還沒有這門課程的觀看權限。</p><a class="btn btn-sm" href="#/course/${c.id}">查看購買方式</a></div></div>`;
     return;
   }
   app.innerHTML = '<div class="container"><p class="muted">載入課程中…</p></div>';
@@ -573,8 +644,9 @@ async function resizeCover(file) {
 }
 
 // 課程列表
-pages.admin = async (app, id) => {
+pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
+  if (id === 'notes') return sub ? pages.noteEdit(app, sub) : pages.noteAdmin(app);
   if (id === 'students') return pages.students(app);
   if (id === 'orders') return pages.orders(app);
   if (id) return pages.edit(app, id);
@@ -585,6 +657,7 @@ pages.admin = async (app, id) => {
     '<div class="admin-list">' + courses.map((c, i) =>
       `<div class="card admin-row">${thumb(c)}<div class="pad"><strong>${esc(c.title)}</strong>` +
       `<p class="muted small">${esc(c.category || '')} · ${lessonsOf(c).length} 個單元 · ${c.published === false ? '<span class="tag">未上架</span>' : '已上架'}` +
+      (c.unlisted ? ' · <span class="tag">不公開</span>' : '') +
       (inFreeWindow(c) ? ` · <span class="tag">限時免費中，至 ${fmtTime(c.freeUntil)}</span>` : freeUpcoming(c) ? ` · ${fmtTime(c.freeFrom)} 起限時免費` : c.freeUntil > 0 && c.price ? ' · 限時免費已結束' : '') + '</p>' +
       `<div class="lesson-nav">${coursesFromDb ? `<a class="btn btn-sm" href="#/admin/${c.id}">編輯</a>` : ''}` +
       `<a class="btn btn-ghost btn-sm" href="#/course/${c.id}">查看</a>` +
@@ -617,6 +690,7 @@ pages.admin = async (app, id) => {
 
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理</a>` +
+  `<a class="chip${cur === 'notes' ? ' active' : ''}" href="#/admin/notes">筆記</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a>` +
   `<a class="chip${cur === 'orders' ? ' active' : ''}" href="#/admin/orders">訂單</a></div>`;
 
@@ -635,8 +709,8 @@ pages.orders = async (app) => {
   const paid = list.filter((o) => o.status === 'paid' && !o.simulated);
   app.innerHTML = '<div class="container editor">' + adminTabs('orders') + '<h1>訂單</h1>' +
     `<p class="muted small">共 ${list.length} 筆，已付款 ${paid.length} 筆，實收 ${money(paid.reduce((s, o) => s + o.amount, 0))}（不含測試／模擬付款）</p>` +
-    (list.length ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>時間</th><th>學生</th><th>課程</th><th>金額</th><th>狀態</th></tr></thead><tbody>' +
-      list.map((o) => `<tr><td class="small">${when(o.createdAt)}</td><td class="small">${esc(o.email)}</td><td class="small">${esc(o.courseTitle || o.courseId)}</td>` +
+    (list.length ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>時間</th><th>學生</th><th>課程／筆記</th><th>金額</th><th>狀態</th></tr></thead><tbody>' +
+      list.map((o) => `<tr><td class="small">${when(o.createdAt)}</td><td class="small">${esc(o.email)}</td><td class="small">${o.kind === 'note' ? '📒 ' : ''}${esc(o.courseTitle || o.courseId || o.noteId)}</td>` +
         `<td class="mono small">${money(o.amount)}</td><td class="small">${esc(ORDER_STATUS[o.status] || o.status)}${o.env === 'stage' ? '（測試）' : ''}</td></tr>`).join('') +
       '</tbody></table></div>' : '<p class="muted">還沒有訂單。</p>') + '</div>';
 };
@@ -648,7 +722,7 @@ pages.students = async (app) => {
   let list = [];
   try {
     const snap = await fb.getDocs(fb.collection(db, 'access'));
-    list = snap.docs.map((d) => ({ email: d.id, courses: d.data().courses || [], expires: d.data().expires || {} }))
+    list = snap.docs.map((d) => ({ email: d.id, courses: d.data().courses || [], expires: d.data().expires || {}, notes: d.data().notes || [] }))
       .sort((a, b) => a.email.localeCompare(b.email));
   } catch (e) {
     console.error(e);
@@ -656,7 +730,7 @@ pages.students = async (app) => {
     return;
   }
   if (!document.body.contains(app)) return;
-  // 只列出付費課程（免費課程登入就能看，不需開通）
+  // 只列出付費課程（免費課程由學生在課程頁自己加入，不需開通）
   const paid = courses.filter((c) => c.price > 0); // 含限時免費的課程（期間結束後需要開通）
   const name = (id) => (findCourse(id) || {}).title || id + '（已刪除的課程）';
   // 日期 ↔ 毫秒（到期日當天 23:59:59 為止）
@@ -669,7 +743,13 @@ pages.students = async (app) => {
           (expires ? `<label class="small grant-exp">到期日 <input class="input" type="date" data-exp="${esc(c.id)}" value="${toDateInput(exp)}"/></label>` +
             (selected.includes(c.id) && exp && exp <= Date.now() ? '<span class="expired small">已到期</span>' : '') : '') + '</div>';
       }).join('') + (expires ? '<p class="muted small">到期日留空 = 不限期限</p>' : '')
-    : '<p class="muted small">目前沒有付費課程。免費課程登入後就能直接觀看，不需要開通。</p>';
+    : '<p class="muted small">目前沒有付費課程。免費課程由學生在課程頁按「加入課程」，不需要開通。</p>';
+  // 付費筆記（購買後永久可看，沒有期限）
+  const paidNotes = notes.filter((n) => n.price > 0);
+  const noteBoxes = (prefix, selected) => paidNotes.length
+    ? '<p class="muted small">筆記：</p>' + paidNotes.map((n) =>
+        `<div class="grant-row"><label class="check"><input type="checkbox" data-${prefix}="${esc(n.id)}" ${selected.includes(n.id) ? 'checked' : ''}/> 📒 ${esc(n.title)}</label></div>`).join('')
+    : '';
   let filter = '';
 
   function draw() {
@@ -677,7 +757,7 @@ pages.students = async (app) => {
     app.innerHTML = '<div class="container editor">' + adminTabs('students') + '<h1>學生開通</h1>' +
       '<form class="card pad" id="add" novalidate><h3>開通新學生</h3>' +
       '<label>學生的登入 Email<input class="input" name="email" type="email" placeholder="student@gmail.com" required/></label>' +
-      '<p class="muted small">要開通的課程：</p>' + boxes('add', []) +
+      '<p class="muted small">要開通的課程：</p>' + boxes('add', []) + noteBoxes('addn', []) +
       `<label>觀看到期日 <span class="muted small">預設為一年後，留空 = 不限期限</span><input class="input" type="date" name="exp" value="${toDateInput(oneYearFrom(Date.now()))}"/></label>` +
       '<button class="btn btn-sm">開通</button>' +
       '<p class="muted small">學生必須用這個 Email 登入網站；Email 註冊的學生需完成 Email 驗證。</p></form>' +
@@ -687,7 +767,7 @@ pages.students = async (app) => {
         `<div class="card pad student" data-email="${esc(s.email)}"><div class="row-between"><strong>${esc(s.email)}</strong>` +
         `<span class="lesson-nav"><button type="button" class="btn btn-sm" data-act="save">儲存</button>` +
         `<button type="button" class="btn btn-ghost btn-sm" data-act="remove">移除</button></span></div>` +
-        boxes('c', s.courses, s.expires) +
+        boxes('c', s.courses, s.expires) + noteBoxes('n', s.notes) +
         s.courses.filter((id) => !paid.some((c) => c.id === id)).map((id) => `<p class="muted small">另有：${esc(name(id))}</p>`).join('') +
         '</div>').join('') : '<p class="muted">還沒有開通任何學生。</p>') +
       '</div>';
@@ -698,15 +778,17 @@ pages.students = async (app) => {
       const email = f.email.value.trim().toLowerCase();
       if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) return toast('Email 格式不正確');
       const picked = [...f.querySelectorAll('[data-add]:checked')].map((el) => el.dataset.add);
-      if (!picked.length) return toast('請至少勾選一門課程');
+      const pickedNotes = [...f.querySelectorAll('[data-addn]:checked')].map((el) => el.dataset.addn);
+      if (!picked.length && !pickedNotes.length) return toast('請至少勾選一門課程或一份筆記');
       const existing = list.find((s) => s.email === email);
       const merged = [...new Set([...(existing ? existing.courses : []), ...picked])];
       const expires = { ...(existing ? existing.expires : {}) };
       const exp = fromDateInput(f.exp.value);
       picked.forEach((id) => { if (exp) expires[id] = exp; else delete expires[id]; });
+      const mergedNotes = [...new Set([...(existing ? existing.notes : []), ...pickedNotes])];
       try {
-        await fb.setDoc(fb.doc(db, 'access', email), { courses: merged, expires });
-        if (existing) { existing.courses = merged; existing.expires = expires; } else list.push({ email, courses: merged, expires });
+        await fb.setDoc(fb.doc(db, 'access', email), { courses: merged, expires, notes: mergedNotes });
+        if (existing) { existing.courses = merged; existing.expires = expires; existing.notes = mergedNotes; } else list.push({ email, courses: merged, expires, notes: mergedNotes });
         list.sort((a, b) => a.email.localeCompare(b.email));
         toast(`已為 ${email} 開通`);
         draw();
@@ -726,7 +808,7 @@ pages.students = async (app) => {
         const s = list.find((x) => x.email === email);
         try {
           if (act === 'remove') {
-            if (!confirm(`確定移除 ${email} 的所有課程權限？`)) return;
+            if (!confirm(`確定移除 ${email} 的所有課程與筆記權限？`)) return;
             await fb.deleteDoc(fb.doc(db, 'access', email));
             list = list.filter((x) => x.email !== email);
             toast('已移除');
@@ -739,7 +821,9 @@ pages.students = async (app) => {
             checked.forEach((id) => { const v = fromDateInput(card.querySelector(`[data-exp="${id}"]`).value); if (v) expires[id] = v; });
             s.courses = [...others, ...checked];
             s.expires = expires;
-            await fb.setDoc(fb.doc(db, 'access', email), { courses: s.courses, expires });
+            const otherNotes = s.notes.filter((id) => !paidNotes.some((n) => n.id === id));
+            s.notes = [...otherNotes, ...[...card.querySelectorAll('[data-n]:checked')].map((el) => el.dataset.n)];
+            await fb.setDoc(fb.doc(db, 'access', email), { courses: s.courses, expires, notes: s.notes });
             toast('已儲存');
           }
           draw();
@@ -784,10 +868,12 @@ pages.edit = async (app, id) => {
       '<div class="two">' + field('分類', 'category', c.category) + field('程度', 'level', c.level) + '</div>' +
       '<div class="two">' + field('講師', 'instructor', c.instructor) + '<span></span></div>' +
       '<div class="two">' + field('售價（0 = 永久免費）', 'price', c.price, 'type="number" min="0"') + field('原價（會顯示劃掉的價格，0 = 不顯示）', 'originalPrice', c.originalPrice, 'type="number" min="0"') + '</div>' +
-      '<div class="free-window"><strong class="small">限時免費</strong><p class="muted small">在這段時間內，登入的學生都能免費觀看；時間到了就恢復售價，需要開通才能看。售價請填一般價格（大於 0）。兩個都留空 = 不設定。</p>' +
+      '<div class="free-window"><strong class="small">限時免費</strong><p class="muted small">在這段時間內，學生可以在課程頁免費加入並觀看；時間到了就恢復售價，需要開通才能看。售價請填一般價格（大於 0）。兩個都留空 = 不設定。</p>' +
       '<div class="two">' + field('開始時間（留空 = 立即開始）', 'freeFrom', toLocalInput(c.freeFrom), 'type="datetime-local"') +
       field('結束時間', 'freeUntil', toLocalInput(c.freeUntil), 'type="datetime-local"') + '</div></div>' +
-      `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label></div>` +
+      `<label class="check"><input type="checkbox" name="published" ${c.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label>` +
+      `<label class="check"><input type="checkbox" name="unlisted" ${c.unlisted ? 'checked' : ''}/> 不公開：首頁不顯示，只有拿到課程連結的人才能進入</label>` +
+      `<p class="muted small">課程連結：<code id="course-link">${esc(courseLink(c.id))}</code> <button type="button" class="btn btn-ghost btn-sm" id="copy-link">複製</button></p></div>` +
 
       '<div class="card pad"><h3>封面</h3><div class="cover-edit">' +
       `<div class="cover-preview" id="cover-prev">${thumb(c)}</div><div>` +
@@ -842,6 +928,7 @@ pages.edit = async (app, id) => {
     c.freeFrom = f.freeFrom.value ? new Date(f.freeFrom.value).getTime() : 0;
     c.freeUntil = f.freeUntil.value ? new Date(f.freeUntil.value).getTime() : 0;
     c.published = f.published.checked;
+    c.unlisted = f.unlisted.checked;
     c.thumb = [f.c1.value, f.c2.value, f.mark.value.trim()];
     c.description = f.description.value.trim();
     c.outcomes = f.outcomes.value.split('\n').map((t) => t.trim()).filter(Boolean);
@@ -895,6 +982,10 @@ pages.edit = async (app, id) => {
     f.onchange = (e) => {
       const lid = e.target.dataset && e.target.dataset.upload;
       if (lid && e.target.files[0]) uploadVideo(lid, e.target.files[0]);
+    };
+    app.querySelector('#copy-link').onclick = async () => {
+      try { await navigator.clipboard.writeText(courseLink(c.id)); toast('已複製課程連結'); }
+      catch (e) { toast('無法複製，請手動選取連結'); }
     };
     const fileInput = app.querySelector('#cover-file');
     fileInput.onchange = async () => {
@@ -974,6 +1065,152 @@ pages.edit = async (app, id) => {
 
 /* ---------------- 說明頁：常見問題、隱私權政策、服務條款 ---------------- */
 const paragraphs = (t) => linkify(esc(t)).replace(/\n/g, '<br>');
+/* ---------------- 筆記區 ---------------- */
+const noteTag = (n) => (isVerified() && ownedNotes.includes(n.id) ? '<span class="owned">✓ 已購買</span>' : priceTag(n));
+
+pages.notes = (app) => {
+  const list = visibleNotes();
+  app.innerHTML = '<div class="container"><h1>筆記</h1><p class="muted">課程重點整理與講義，購買後可以隨時打開閱讀。</p>' +
+    (list.length ? '<div class="grid">' + list.map((n) =>
+      `<a class="card course" href="#/note/${esc(n.id)}">${thumb(n)}<div class="pad">` +
+      (n.published === false ? '<span class="tag">未上架</span>' : '') +
+      `<h3>${esc(n.title)}</h3><p class="muted small">${esc(n.subtitle || '')}</p><div>${noteTag(n)}</div></div></a>`).join('') + '</div>'
+      : '<p class="muted">目前還沒有筆記。</p>') + '</div>';
+};
+
+pages.note = (app, id) => {
+  const n = findNote(id);
+  if (!n || (n.published === false && !isAdmin())) return notFound(app);
+  let box;
+  if (ownsNote(n.id)) {
+    box = (n.price && !isAdmin() ? '<p class="owned">✓ 已購買</p>' : `<p>${priceTag(n)}</p>`) +
+      '<button class="btn btn-block" id="open-note">📖 打開筆記</button>' +
+      '<p class="muted small">筆記會在新分頁打開。筆記僅供個人學習使用，請勿轉傳連結或檔案。</p>';
+  } else if (!user) {
+    box = `<p>${priceTag(n)}</p><a class="btn btn-block" href="#/login?next=/note/${esc(n.id)}">${n.price ? '登入以購買' : '登入後免費閱讀'}</a>`;
+  } else if (!isVerified()) {
+    box = `<p>${priceTag(n)}</p><a class="btn btn-block" href="#/verify">請先驗證 Email</a>`;
+  } else {
+    box = `<p>${priceTag(n)}</p>` + (payEnabled()
+      ? `<button class="btn btn-block" id="pay">💳 線上付款 ${money(n.price)}</button>` +
+        '<p class="muted small">購買後可永久閱讀。由綠界科技 ECPay 提供安全付款，付款成功後自動開通。</p>'
+      : `<div class="notice">${esc(CONFIG.contact || '請聯繫我們開通。')}</div>` +
+        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`);
+  }
+  app.innerHTML = '<div class="container course-page">' +
+    '<div><a href="#/notes" class="muted small">← 所有筆記</a>' +
+    (isAdmin() ? ` · <a href="#/admin/notes/${esc(n.id)}" class="link small">✎ 編輯此筆記</a>` + (n.published === false ? ' <span class="tag">（未上架）</span>' : '') : '') +
+    `<h1>${esc(n.title)}</h1>` + (n.subtitle ? `<p class="lead muted">${esc(n.subtitle)}</p>` : '') +
+    (n.description ? `<h2>內容介紹</h2><p>${paragraphs(n.description)}</p>` : '') + '</div>' +
+    `<aside class="card buy">${thumb(n)}<div class="pad">${box}</div></aside></div>`;
+  // 管理者：測試線上付款
+  if (isAdmin() && n.price > 0 && !ownedNotes.includes(n.id) && payEnabled()) {
+    app.querySelector('.buy .pad').insertAdjacentHTML('beforeend',
+      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(n.price)}</button>`);
+  }
+  const payBtn = app.querySelector('#pay');
+  if (payBtn) payBtn.onclick = () => startPayment(n, payBtn, 'note');
+  const openBtn = app.querySelector('#open-note');
+  if (openBtn) openBtn.onclick = async () => {
+    // 先開新分頁再填網址，避免被瀏覽器當成彈出式視窗擋掉
+    const w = window.open('', '_blank');
+    try {
+      const snap = await fb.getDoc(fb.doc(db, 'noteFiles', n.id));
+      const url = snap.exists() ? snap.data().url : '';
+      if (!url) { if (w) w.close(); return toast('這份筆記還沒有設定檔案連結'); }
+      if (w) { w.opener = null; w.location.href = url; } else location.href = url;
+    } catch (e) {
+      if (w) w.close();
+      toast('無法打開筆記：' + (e.code || e.message));
+    }
+  };
+};
+
+// 管理者：筆記列表
+pages.noteAdmin = (app) => {
+  app.innerHTML = '<div class="container">' + adminTabs('notes') +
+    '<div class="row-between"><h1>筆記管理</h1><a class="btn btn-sm" href="#/admin/notes/new">＋ 新增筆記</a></div>' +
+    '<p class="muted small">筆記檔案放在你的 Google Drive：分享設定選「知道連結的任何人（檢視者）」，再把連結貼到筆記裡。網站只會把連結給已購買的學生。</p>' +
+    (notes.length ? '<div class="admin-list">' + notes.map((n) =>
+      `<div class="card admin-row">${thumb(n)}<div class="pad"><strong>${esc(n.title)}</strong>` +
+      `<p class="muted small">${n.price ? money(n.price) : '免費'} · ${n.published === false ? '<span class="tag">未上架</span>' : '已上架'}</p>` +
+      `<div class="lesson-nav"><a class="btn btn-sm" href="#/admin/notes/${esc(n.id)}">編輯</a><a class="btn btn-ghost btn-sm" href="#/note/${esc(n.id)}">查看</a></div></div></div>`).join('') + '</div>'
+      : '<p class="muted">還沒有筆記，按「＋ 新增筆記」開始。</p>') + '</div>';
+};
+
+// 管理者：新增／編輯筆記
+pages.noteEdit = async (app, id) => {
+  const isNew = id === 'new';
+  const n = isNew
+    ? { id: newId('n'), title: '', subtitle: '', description: '', price: 0, originalPrice: 0, thumb: ['#f59e0b', '#ef4444', '筆記'], published: false, order: notes.length }
+    : JSON.parse(JSON.stringify(findNote(id) || {}));
+  if (!n.id) return notFound(app);
+  n.thumb = n.thumb || ['#f59e0b', '#ef4444', '筆記'];
+  let url = '';
+  if (!isNew) {
+    try { const snap = await fb.getDoc(fb.doc(db, 'noteFiles', n.id)); url = snap.exists() ? snap.data().url || '' : ''; } catch (e) { console.error(e); }
+  }
+  const field = (label, name, val, attrs = '') => `<label>${label}<input class="input" name="${name}" value="${esc(val)}" ${attrs}/></label>`;
+  function draw() {
+    app.innerHTML = '<div class="container editor">' + adminTabs('notes') + `<h1>${isNew ? '新增筆記' : '編輯筆記'}</h1>` +
+      '<form id="ned" novalidate><div class="card pad">' +
+      field('筆記名稱', 'title', n.title, 'required') + field('副標題', 'subtitle', n.subtitle) +
+      `<label>內容介紹<textarea class="input textarea" name="description" rows="5">${esc(n.description)}</textarea></label>` +
+      '<div class="two">' + field('售價（0 = 免費，登入即可打開）', 'price', n.price, 'type="number" min="0"') +
+      field('原價（會顯示劃掉的價格，0 = 不顯示）', 'originalPrice', n.originalPrice || 0, 'type="number" min="0"') + '</div>' +
+      field('Google Drive 分享連結', 'url', url, 'placeholder="https://drive.google.com/file/d/…/view"') +
+      '<p class="muted small">在 Drive 對檔案按「共用」→ 一般存取權選「知道連結的任何人」、角色「檢視者」。不想讓人下載可在共用設定的齒輪 ⚙️ 取消「檢視者可以下載」。</p>' +
+      `<label class="check"><input type="checkbox" name="published" ${n.published !== false ? 'checked' : ''}/> 上架（取消勾選則只有管理者看得到）</label></div>` +
+      '<div class="card pad"><h3>封面</h3><div class="cover-edit">' +
+      `<div class="cover-preview">${thumb(n)}</div><div>` +
+      '<label>上傳封面照片 <span class="muted small">會自動裁切成 16:9</span><input class="input" type="file" accept="image/*" id="ncover"/></label>' +
+      (n.cover ? '<button type="button" class="btn btn-ghost btn-sm" id="ncover-rm">移除封面照片</button>' : '') +
+      `<div class="two"><label>顏色 1<input class="input" type="color" name="c1" value="${esc(n.thumb[0])}"/></label><label>顏色 2<input class="input" type="color" name="c2" value="${esc(n.thumb[1])}"/></label></div>` +
+      field('封面文字', 'mark', n.thumb[2], 'maxlength="6"') + '</div></div></div>' +
+      '<div class="lesson-nav"><button class="btn">儲存</button>' +
+      (isNew ? '' : '<button type="button" class="btn btn-ghost" id="ndel">刪除筆記</button>') + '</div></form></div>';
+    const f = app.querySelector('#ned');
+    const collect = () => {
+      n.title = f.title.value.trim(); n.subtitle = f.subtitle.value.trim(); n.description = f.description.value.trim();
+      n.price = Math.max(0, Math.round(+f.price.value || 0)); n.originalPrice = Math.max(0, Math.round(+f.originalPrice.value || 0));
+      n.published = f.published.checked; n.thumb = [f.c1.value, f.c2.value, f.mark.value.trim()];
+      url = f.url.value.trim();
+    };
+    app.querySelector('#ncover').onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      try { collect(); n.cover = await resizeCover(file); draw(); toast('封面已更新，記得按「儲存」'); } catch (err) { toast('無法讀取這張圖片'); }
+    };
+    const rm = app.querySelector('#ncover-rm');
+    if (rm) rm.onclick = () => { collect(); delete n.cover; draw(); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      collect();
+      if (!n.title) return toast('請輸入筆記名稱');
+      if (url && !/^https:\/\//.test(url)) return toast('檔案連結請貼完整的 https:// 網址');
+      const btn = f.querySelector('button'); btn.disabled = true;
+      try {
+        const data = { ...n, updatedAt: Date.now() }; delete data.id;
+        await fb.setDoc(fb.doc(db, 'notes', n.id), data);
+        await fb.setDoc(fb.doc(db, 'noteFiles', n.id), { url });
+        await loadNotes();
+        toast('已儲存');
+        go('/admin/notes');
+      } catch (err) { btn.disabled = false; toast('儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    };
+    const del = app.querySelector('#ndel');
+    if (del) del.onclick = async () => {
+      if (!confirm('確定刪除這份筆記？已購買的學生將無法再打開。')) return;
+      try {
+        await fb.deleteDoc(fb.doc(db, 'notes', n.id));
+        await fb.deleteDoc(fb.doc(db, 'noteFiles', n.id));
+        await loadNotes();
+        toast('已刪除'); go('/admin/notes');
+      } catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+    };
+  }
+  draw();
+};
+
 function faqList(items) {
   return '<div class="faq">' + items.map(([q, a]) =>
     `<details class="card"><summary>${esc(q)}</summary><div class="faq-a">${paragraphs(a)}</div></details>`).join('') + '</div>';
