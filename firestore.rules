@@ -99,6 +99,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // coupons/{折扣碼}：只有管理者能讀寫（學生輸入的折扣碼由 Cloud Functions 檢查）
+    match /coupons/{code} {
+      allow read, write: if isAdmin();
+    }
+    // couponUses/{折扣碼}__{Email}：使用紀錄，由 Cloud Functions 寫入；管理者可讀
+    match /couponUses/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // orders/{訂單編號}：線上付款訂單，由 Cloud Functions 建立與更新
     // 學生只能讀自己的訂單；管理者可讀全部；網頁端一律不能寫入
     match /orders/{orderId} {

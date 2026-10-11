@@ -177,6 +177,13 @@ code { font-family: 'JetBrains Mono', monospace; font-size: .9em; background: va
 .footer-links a:hover { color: var(--primary); }
 .footer p { margin: 0; }
 .footer p + p { margin-top: 4px; }
+/* 折扣碼 */
+.coupon { margin-top: 12px; font-size: 14px; }
+.coupon summary { cursor: pointer; color: var(--muted); }
+.coupon-row { display: flex; gap: 8px; margin-top: 8px; }
+.coupon-row .input { flex: 1; min-width: 0; text-transform: uppercase; }
+#coupon-msg { margin: 8px 0; }
+#coupon-msg:empty { display: none; }
 
 /* 管理者：學生開通 */
 .admin-tabs { margin-top: 24px; }

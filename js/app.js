@@ -298,16 +298,29 @@ pages.home = (app) => {
 // config.js 的 onlinePayment：true = 所有人；'admin' = 只有管理者（綠界測試期間）；false = 關閉
 const payEnabled = () => CONFIG.onlinePayment === true || (CONFIG.onlinePayment === 'admin' && isAdmin());
 
+// 呼叫 Cloud Function（asia-east1）
+async function callFn(name, data) {
+  const fn = await import(FIREBASE + 'firebase-functions.js');
+  return (await fn.httpsCallable(fn.getFunctions(fbApp, 'asia-east1'), name)(data)).data;
+}
+const itemRef = (c, kind) => (kind === 'note' ? { noteId: c.id } : { courseId: c.id });
+const fnError = (e, fallback) => (e && e.message && !/internal/i.test(e.code || '') ? e.message : fallback);
+
 // 呼叫 Cloud Function 建立訂單，再把表單送到綠界付款頁
-// kind：'course'（課程）或 'note'（筆記）
-async function startPayment(c, btn, kind = 'course') {
+// kind：'course'（課程）或 'note'（筆記）；coupon：已套用的折扣碼
+// 全額折價券（折扣後 0 元）：不經過綠界，直接開通後到訂單頁
+async function startPayment(c, btn, kind = 'course', coupon = '') {
   btn.dataset.label = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '正在前往付款頁…';
+  btn.textContent = coupon && btn.dataset.free ? '兌換中…' : '正在前往付款頁…';
   try {
-    const fn = await import(FIREBASE + 'firebase-functions.js');
-    const createOrder = fn.httpsCallable(fn.getFunctions(fbApp, 'asia-east1'), 'createOrder');
-    const { data } = await createOrder(kind === 'note' ? { noteId: c.id } : { courseId: c.id });
+    const data = await callFn('createOrder', { ...itemRef(c, kind), ...(coupon ? { coupon } : {}) });
+    if (data.free) {
+      accessReady = loadAccess();
+      await accessReady;
+      go('/order/' + data.orderId);
+      return;
+    }
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = data.action;
@@ -322,8 +335,59 @@ async function startPayment(c, btn, kind = 'course') {
     console.error(e);
     btn.disabled = false;
     btn.textContent = btn.dataset.label || `💳 線上付款 ${money(c.price)}`;
-    toast(e && e.message && !/internal/i.test(e.code || '') ? e.message : '目前無法建立訂單，請稍後再試');
+    toast(fnError(e, '目前無法建立訂單，請稍後再試'));
   }
+}
+
+/* 折扣碼：課程頁、筆記頁的購買區塊 */
+const couponBox = () => '<details class="coupon"><summary>有折扣碼？</summary>' +
+  '<div class="coupon-row"><input class="input" id="coupon" placeholder="輸入折扣碼" autocomplete="off" spellcheck="false"/>' +
+  '<button type="button" class="btn btn-ghost btn-sm" id="coupon-apply">套用</button></div><p class="small" id="coupon-msg"></p></details>';
+
+function bindCoupon(app, c, kind) {
+  const input = app.querySelector('#coupon');
+  if (!input) return;
+  const msg = app.querySelector('#coupon-msg');
+  const applyBtn = app.querySelector('#coupon-apply');
+  const pay = app.querySelector('#pay');
+  let code = '';
+  const reset = () => {
+    code = '';
+    app.querySelector('#redeem')?.remove();
+    if (pay) { pay.hidden = false; pay.textContent = pay.dataset.orig || pay.textContent; }
+  };
+  if (pay) pay.dataset.orig = pay.textContent;
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); applyBtn.click(); } };
+  input.oninput = () => { if (code) { reset(); msg.textContent = ''; } };
+  applyBtn.onclick = async () => {
+    const raw = input.value.trim();
+    if (!raw) return input.focus();
+    applyBtn.disabled = true; msg.className = 'small muted'; msg.textContent = '檢查中…';
+    reset();
+    try {
+      const r = await callFn('checkCoupon', { ...itemRef(c, kind), coupon: raw });
+      code = r.code;
+      msg.className = 'small owned';
+      if (r.final === 0) {
+        msg.textContent = `✓ 折扣碼 ${r.code}：全額折抵，免費兌換`;
+        if (pay) pay.hidden = true;
+        const b = document.createElement('button');
+        b.className = 'btn btn-block'; b.id = 'redeem'; b.dataset.free = '1';
+        b.textContent = `🎟️ 免費兌換${kind === 'note' ? '筆記' : '課程'}`;
+        b.onclick = () => startPayment(c, b, kind, code);
+        msg.after(b);
+      } else {
+        msg.textContent = `✓ 折扣碼 ${r.code}：折抵 ${money(r.discount)}，折扣後 ${money(r.final)}`;
+        if (pay) pay.textContent = `💳 線上付款 ${money(r.final)}`;
+        else msg.textContent += '（購買時請在來信中註明折扣碼）';
+      }
+    } catch (e) {
+      msg.className = 'small expired';
+      msg.textContent = fnError(e, '目前無法檢查折扣碼，請稍後再試');
+    }
+    applyBtn.disabled = false;
+  };
+  if (pay) pay.onclick = () => startPayment(c, pay, kind, code);
 }
 
 const ORDER_STATUS = { pending: '等待付款', paid: '付款成功', failed: '付款失敗', amount_mismatch: '金額不符', simulated: '模擬付款（未開通）' };
@@ -344,17 +408,19 @@ pages.order = async (app, id) => {
     const back = isNote ? `<a class="btn btn-sm" href="#/note/${esc(o.noteId)}">回到筆記頁</a>` : (c ? `<a class="btn btn-sm" href="#/course/${esc(c.id)}">回到課程頁</a>` : '');
     const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
     const info = '<dl class="order-info">' + row('訂單編號', `<span class="mono">${esc(id)}</span>`) + row(isNote ? '筆記' : '課程', esc(o.courseTitle || o.courseId || o.noteId)) +
-      row('金額', money(o.amount)) + row('狀態', esc(ORDER_STATUS[o.status] || o.status)) + '</dl>';
+      (o.coupon ? row('原價', money(o.originalAmount || o.amount)) + row('折扣碼', `${esc(o.coupon)}（-${money(o.discount || 0)}）`) : '') +
+      row('金額', money(o.amount)) + row('狀態', esc(o.paymentType === 'coupon' ? '已兌換' : (ORDER_STATUS[o.status] || o.status))) + '</dl>';
+    const doneTitle = o.paymentType === 'coupon' ? '🎉 兌換成功' : '🎉 付款成功';
     if (o.status === 'paid') {
       accessReady = loadAccess();
       await accessReady;
       if (isNote) {
-        app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
+        app.innerHTML = `<div class="container narrow"><h1>${doneTitle}</h1><div class="card pad">` + info +
           '<p>筆記已經為你開通，可以隨時到「我的課程」的「我的筆記」打開。</p>' +
           `<a class="btn btn-block" href="#/note/${esc(o.noteId)}">打開筆記</a></div></div>`;
         return;
       }
-      app.innerHTML = '<div class="container narrow"><h1>🎉 付款成功</h1><div class="card pad">' + info +
+      app.innerHTML = `<div class="container narrow"><h1>${doneTitle}</h1><div class="card pad">` + info +
         '<p>課程已經為你開通，現在就可以開始上課！</p>' +
         (expiryOf(o.courseId) ? `<p class="muted small">觀看期限至 ${fmtTime(expiryOf(o.courseId))}</p>` : '') +
         `<a class="btn btn-block" href="#/learn/${esc(o.courseId)}">開始上課</a></div></div>`;
@@ -406,7 +472,7 @@ pages.course = (app, id) => {
       ? `<button class="btn btn-block" id="pay">💳 線上付款 ${money(c.price)}</button>` +
         '<p class="muted small">購買後可觀看一年（自開通日起算）。由綠界科技 ECPay 提供安全付款，支援信用卡、ATM 轉帳、超商代碼等方式，付款成功後自動開通。</p>'
       : `<div class="notice">${esc(CONFIG.contact || '請聯繫我們開通課程。')}</div>` +
-        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`);
+        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`) + couponBox();
   }
 
   app.innerHTML = '<div class="container course-page">' +
@@ -426,10 +492,9 @@ pages.course = (app, id) => {
   // 管理者：測試線上付款（管理者本身可看所有課程，所以另外提供測試按鈕）
   if (mine && isAdmin() && !granted(c.id) && c.price > 0 && !isFree(c) && payEnabled()) {
     app.querySelector('.buy .pad').insertAdjacentHTML('beforeend',
-      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(c.price)}</button>`);
+      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(c.price)}</button>` + couponBox());
   }
-  const payBtn = app.querySelector('#pay');
-  if (payBtn) payBtn.onclick = () => startPayment(c, payBtn);
+  bindCoupon(app, c, 'course');
   const joinBtn = app.querySelector('#join');
   if (joinBtn) joinBtn.onclick = () => joinCourse(c, joinBtn);
 };
@@ -647,6 +712,7 @@ async function resizeCover(file) {
 pages.admin = async (app, id, query, sub) => {
   if (!adminGuard(app)) return;
   if (id === 'notes') return sub ? pages.noteEdit(app, sub) : pages.noteAdmin(app);
+  if (id === 'coupons') return pages.coupons(app);
   if (id === 'students') return pages.students(app);
   if (id === 'orders') return pages.orders(app);
   if (id) return pages.edit(app, id);
@@ -691,6 +757,7 @@ pages.admin = async (app, id, query, sub) => {
 const adminTabs = (cur) => '<div class="chips admin-tabs">' +
   `<a class="chip${cur === 'courses' ? ' active' : ''}" href="#/admin">課程管理</a>` +
   `<a class="chip${cur === 'notes' ? ' active' : ''}" href="#/admin/notes">筆記</a>` +
+  `<a class="chip${cur === 'coupons' ? ' active' : ''}" href="#/admin/coupons">折扣碼</a>` +
   `<a class="chip${cur === 'students' ? ' active' : ''}" href="#/admin/students">學生開通</a>` +
   `<a class="chip${cur === 'orders' ? ' active' : ''}" href="#/admin/orders">訂單</a></div>`;
 
@@ -709,9 +776,9 @@ pages.orders = async (app) => {
   const paid = list.filter((o) => o.status === 'paid' && !o.simulated);
   app.innerHTML = '<div class="container editor">' + adminTabs('orders') + '<h1>訂單</h1>' +
     `<p class="muted small">共 ${list.length} 筆，已付款 ${paid.length} 筆，實收 ${money(paid.reduce((s, o) => s + o.amount, 0))}（不含測試／模擬付款）</p>` +
-    (list.length ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>時間</th><th>學生</th><th>課程／筆記</th><th>金額</th><th>狀態</th></tr></thead><tbody>' +
+    (list.length ? '<div class="card table-wrap"><table class="orders"><thead><tr><th>時間</th><th>學生</th><th>課程／筆記</th><th>金額</th><th>折扣碼</th><th>狀態</th></tr></thead><tbody>' +
       list.map((o) => `<tr><td class="small">${when(o.createdAt)}</td><td class="small">${esc(o.email)}</td><td class="small">${o.kind === 'note' ? '📒 ' : ''}${esc(o.courseTitle || o.courseId || o.noteId)}</td>` +
-        `<td class="mono small">${money(o.amount)}</td><td class="small">${esc(ORDER_STATUS[o.status] || o.status)}${o.env === 'stage' ? '（測試）' : ''}</td></tr>`).join('') +
+        `<td class="mono small">${money(o.amount)}</td><td class="small">${o.coupon ? esc(o.coupon) : ''}</td><td class="small">${o.paymentType === 'coupon' ? '已兌換' : esc(ORDER_STATUS[o.status] || o.status)}${o.env === 'stage' ? '（測試）' : ''}</td></tr>`).join('') +
       '</tbody></table></div>' : '<p class="muted">還沒有訂單。</p>') + '</div>';
 };
 
@@ -1065,6 +1132,93 @@ pages.edit = async (app, id) => {
 
 /* ---------------- 說明頁：常見問題、隱私權政策、服務條款 ---------------- */
 const paragraphs = (t) => linkify(esc(t)).replace(/\n/g, '<br>');
+/* ---------------- 折扣碼（管理者） ---------------- */
+// coupons/{代碼} 只有管理者讀寫；學生輸入折扣碼時由 Cloud Function 檢查與計算價格
+pages.coupons = async (app) => {
+  if (!adminGuard(app)) return;
+  app.innerHTML = '<div class="container"><p class="muted">載入中…</p></div>';
+  let list = [];
+  try {
+    const snap = await fb.getDocs(fb.collection(db, 'coupons'));
+    list = snap.docs.map((d) => ({ code: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch (e) {
+    console.error(e);
+    app.innerHTML = '<div class="container">' + adminTabs('coupons') + '<h1>折扣碼</h1><div class="card pad"><p>無法讀取折扣碼：' + esc(e.code || e.message) + '</p><p class="muted small">請確認已部署最新的 Firestore 規則。</p></div></div>';
+    return;
+  }
+  if (!document.body.contains(app)) return;
+  const items = [...courses.filter((c) => c.price > 0).map((c) => ({ key: 'course:' + c.id, title: c.title })),
+    ...notes.filter((n) => n.price > 0).map((n) => ({ key: 'note:' + n.id, title: '📒 ' + n.title }))];
+  const itemName = (k) => (items.find((i) => i.key === k) || {}).title || k;
+  const desc = (c) => (c.type === 'amount' ? `折抵 ${money(c.value)}` : c.value >= 100 ? '全額折抵（免費）' : `${100 - c.value} 折（-${c.value}%）`);
+  const toDateInput = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+
+  function draw() {
+    app.innerHTML = '<div class="container editor">' + adminTabs('coupons') + '<h1>折扣碼</h1>' +
+      '<form class="card pad" id="cf" novalidate><h3>新增折扣碼</h3>' +
+      '<div class="two"><label>折扣碼 <span class="muted small">英文、數字、- 或 _，2–32 字</span><input class="input" name="code" maxlength="32" placeholder="例如 WELCOME100" style="text-transform:uppercase" required/></label>' +
+      '<label>折扣方式<select class="input" name="type"><option value="percent">打折（%）</option><option value="amount">折抵金額（元）</option></select></label></div>' +
+      '<div class="two"><label><span id="vlabel">折扣 %（100 = 全額折價券，免費兌換）</span><input class="input" name="value" type="number" min="1" value="100"/></label>' +
+      '<label>可使用次數 <span class="muted small">0 = 不限；每個帳號只能用一次</span><input class="input" name="maxUses" type="number" min="0" value="0"/></label></div>' +
+      '<label>到期日 <span class="muted small">留空 = 不限</span><input class="input" type="date" name="exp"/></label>' +
+      '<p class="muted small">適用範圍（都不勾 = 所有付費課程與筆記）：</p>' +
+      (items.length ? items.map((i) => `<label class="check"><input type="checkbox" data-scope="${esc(i.key)}"/> ${esc(i.title)}</label>`).join('') : '<p class="muted small">目前沒有付費課程或筆記。</p>') +
+      '<button class="btn btn-sm">建立折扣碼</button>' +
+      '<p class="muted small">學生在付費課程或筆記頁點「有折扣碼？」輸入。全額折價券不需要經過綠界付款，兌換後直接開通（課程可觀看一年，筆記永久）。</p></form>' +
+      `<h2>已建立的折扣碼（${list.length}）</h2>` +
+      (list.length ? list.map((c) =>
+        `<div class="card pad student"><div class="row-between"><strong class="mono">${esc(c.code)}</strong>` +
+        `<span class="lesson-nav"><button type="button" class="btn btn-ghost btn-sm" data-toggle="${esc(c.code)}">${c.active === false ? '啟用' : '停用'}</button>` +
+        `<button type="button" class="btn btn-ghost btn-sm" data-del="${esc(c.code)}">刪除</button></span></div>` +
+        `<p class="small">${desc(c)} · 已使用 ${c.used || 0}${c.maxUses ? ' / ' + c.maxUses : ''} 次` +
+        (c.expiresAt ? ` · 到期 ${toDateInput(c.expiresAt)}${c.expiresAt <= Date.now() ? '（已過期）' : ''}` : '') +
+        (c.active === false ? ' · <span class="expired">已停用</span>' : '') + '</p>' +
+        `<p class="muted small">適用：${(c.appliesTo || []).length ? c.appliesTo.map((k) => esc(itemName(k))).join('、') : '所有付費課程與筆記'}</p></div>`).join('')
+        : '<p class="muted">還沒有折扣碼。</p>') + '</div>';
+
+    const f = app.querySelector('#cf');
+    const el = f.elements;
+    el.type.onchange = () => {
+      app.querySelector('#vlabel').textContent = el.type.value === 'amount' ? '折抵金額（元）' : '折扣 %（100 = 全額折價券，免費兌換）';
+    };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const code = el.code.value.trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{2,32}$/.test(code)) return toast('折扣碼只能用英文、數字、- 或 _，2–32 字');
+      if (list.some((c) => c.code === code)) return toast('這個折扣碼已經存在');
+      const value = Math.round(+el.value.value || 0);
+      if (!(value > 0) || (el.type.value === 'percent' && value > 100)) return toast(el.type.value === 'percent' ? '折扣 % 請填 1–100' : '折抵金額請大於 0');
+      const data = {
+        type: el.type.value, value, maxUses: Math.max(0, Math.round(+el.maxUses.value || 0)), used: 0,
+        expiresAt: el.exp.value ? new Date(el.exp.value + 'T23:59:59').getTime() : 0,
+        appliesTo: [...f.querySelectorAll('[data-scope]:checked')].map((el) => el.dataset.scope),
+        active: true, createdAt: Date.now()
+      };
+      try {
+        await fb.setDoc(fb.doc(db, 'coupons', code), data);
+        list.unshift({ code, ...data });
+        toast('已建立折扣碼 ' + code);
+        draw();
+      } catch (err) { toast('建立失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    };
+    app.querySelectorAll('[data-toggle]').forEach((b) => {
+      b.onclick = async () => {
+        const c = list.find((x) => x.code === b.dataset.toggle);
+        try { await fb.setDoc(fb.doc(db, 'coupons', c.code), { active: c.active === false }, { merge: true }); c.active = c.active === false; draw(); }
+        catch (err) { toast('操作失敗：' + (err.code || err.message)); }
+      };
+    });
+    app.querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm(`確定刪除折扣碼 ${b.dataset.del}？`)) return;
+        try { await fb.deleteDoc(fb.doc(db, 'coupons', b.dataset.del)); list = list.filter((x) => x.code !== b.dataset.del); draw(); }
+        catch (err) { toast('刪除失敗：' + (err.code || err.message)); }
+      };
+    });
+  }
+  draw();
+};
+
 /* ---------------- 筆記區 ---------------- */
 const noteTag = (n) => (isVerified() && ownedNotes.includes(n.id) ? '<span class="owned">✓ 已購買</span>' : priceTag(n));
 
@@ -1095,7 +1249,7 @@ pages.note = (app, id) => {
       ? `<button class="btn btn-block" id="pay">💳 線上付款 ${money(n.price)}</button>` +
         '<p class="muted small">購買後可永久閱讀。由綠界科技 ECPay 提供安全付款，付款成功後自動開通。</p>'
       : `<div class="notice">${esc(CONFIG.contact || '請聯繫我們開通。')}</div>` +
-        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`);
+        `<p class="muted small">來信時請提供你的登入 Email：<br><strong>${esc(user.email)}</strong></p>`) + couponBox();
   }
   app.innerHTML = '<div class="container course-page">' +
     '<div><a href="#/notes" class="muted small">← 所有筆記</a>' +
@@ -1106,10 +1260,9 @@ pages.note = (app, id) => {
   // 管理者：測試線上付款
   if (isAdmin() && n.price > 0 && !ownedNotes.includes(n.id) && payEnabled()) {
     app.querySelector('.buy .pad').insertAdjacentHTML('beforeend',
-      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(n.price)}</button>`);
+      `<button class="btn btn-ghost btn-sm btn-block" id="pay">🧪 管理者：測試線上付款 ${money(n.price)}</button>` + couponBox());
   }
-  const payBtn = app.querySelector('#pay');
-  if (payBtn) payBtn.onclick = () => startPayment(n, payBtn, 'note');
+  bindCoupon(app, n, 'note');
   const openBtn = app.querySelector('#open-note');
   if (openBtn) openBtn.onclick = async () => {
     // 先開新分頁再填網址，避免被瀏覽器當成彈出式視窗擋掉
