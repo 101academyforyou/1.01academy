@@ -1,6 +1,6 @@
 /* 1.01 Academy — 綠界 ECPay 線上付款，付款成功後自動開通課程
  *
- * createOrder：學生按「線上付款」時建立訂單，回傳送往綠界付款頁的表單
+ * createOrder：學生按「線上付款」時建立訂單（課程或筆記），回傳送往綠界付款頁的表單
  * ecpayNotify：綠界付款完成後通知這裡（ReturnURL），驗證後自動開通課程
  *
  * 設定（見 README.md）：
@@ -49,19 +49,29 @@ exports.createOrder = onCall({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV] }, async
     const admins = ADMIN_EMAILS.value().split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
     if (!admins.includes(email)) throw new HttpsError('failed-precondition', '線上付款準備中，暫時無法使用，請來信洽詢');
   }
-  const courseId = String((req.data && req.data.courseId) || '');
-  if (!/^[\w-]{1,64}$/.test(courseId)) throw new HttpsError('invalid-argument', '課程不存在');
+  // 買課程（courseId）或筆記（noteId）
+  const noteId = String((req.data && req.data.noteId) || '');
+  const isNote = !!noteId;
+  const courseId = isNote ? '' : String((req.data && req.data.courseId) || '');
+  const itemId = isNote ? noteId : courseId;
+  const label = isNote ? '筆記' : '課程';
+  if (!/^[\w-]{1,64}$/.test(itemId)) throw new HttpsError('invalid-argument', `${label}不存在`);
 
-  const snap = await db.doc(`courses/${courseId}`).get();
-  if (!snap.exists) throw new HttpsError('not-found', '課程不存在');
+  const snap = await db.doc(`${isNote ? 'notes' : 'courses'}/${itemId}`).get();
+  if (!snap.exists) throw new HttpsError('not-found', `${label}不存在`);
   const course = snap.data();
-  if (course.published === false) throw new HttpsError('not-found', '課程不存在');
-  if (isFreeNow(course)) throw new HttpsError('failed-precondition', '這門課程目前免費，登入即可觀看');
+  if (course.published === false) throw new HttpsError('not-found', `${label}不存在`);
+  if (isNote ? !course.price : isFreeNow(course)) {
+    throw new HttpsError('failed-precondition', isNote ? '這份筆記免費，登入即可打開' : '這門課程目前免費，請在課程頁按「免費加入課程」');
+  }
   const amount = Math.round(Number(course.price));
-  if (!(amount > 0)) throw new HttpsError('failed-precondition', '課程價格設定有誤');
+  if (!(amount > 0)) throw new HttpsError('failed-precondition', `${label}價格設定有誤`);
 
   const access = await db.doc(`access/${email}`).get();
-  if (access.exists && activeGrant(access.data(), courseId)) {
+  if (isNote && access.exists && (access.data().notes || []).includes(noteId)) {
+    throw new HttpsError('already-exists', '你已經購買過這份筆記');
+  }
+  if (!isNote && access.exists && activeGrant(access.data(), courseId)) {
     throw new HttpsError('already-exists', '你已經擁有這門課程，觀看期限內不需要重新購買');
   }
 
@@ -75,7 +85,7 @@ exports.createOrder = onCall({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV] }, async
     env: ECPAY_ENV.value(),
     tradeNo,
     amount,
-    itemName: course.title || courseId,
+    itemName: course.title || itemId,
     returnUrl: `https://${REGION}-${projectId}.cloudfunctions.net/ecpayNotify`,
     clientBackUrl: `${site}/#/order/${tradeNo}`
   });
@@ -83,8 +93,9 @@ exports.createOrder = onCall({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV] }, async
   await db.doc(`orders/${tradeNo}`).set({
     uid: req.auth.uid,
     email,
-    courseId,
-    courseTitle: course.title || courseId,
+    kind: isNote ? 'note' : 'course',
+    ...(isNote ? { noteId } : { courseId }),
+    courseTitle: course.title || itemId,
     amount,
     status: 'pending',
     env: ECPAY_ENV.value(),
@@ -125,6 +136,18 @@ exports.ecpayNotify = onRequest({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV], invo
       // 正式環境不接受綠界後台的「模擬付款」
       if (simulated && ECPAY_ENV.value() === 'prod') {
         tx.update(orderRef, { status: 'simulated', updatedAt: FieldValue.serverTimestamp() });
+        return;
+      }
+      // 筆記：購買後永久可看，不設期限
+      if (order.kind === 'note') {
+        tx.update(orderRef, {
+          status: 'paid',
+          simulated,
+          ecpayTradeNo: String(p.TradeNo || ''),
+          paymentType: String(p.PaymentType || ''),
+          paidAt: FieldValue.serverTimestamp()
+        });
+        tx.set(accessRef, { notes: FieldValue.arrayUnion(order.noteId) }, { merge: true });
         return;
       }
       // 觀看期限：付款後一年；若還在期限內（例如重複購買）則從原到期日再延長一年

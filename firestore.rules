@@ -25,7 +25,7 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // access/{學生 Email（小寫）} = { courses: ['course1'], expires: { course1: 到期時間毫秒 } }
+    // access/{學生 Email（小寫）} = { courses: ['course1'], expires: { course1: 到期時間毫秒 }, notes: ['筆記id'] }
     // 學生只能讀自己的開通紀錄；只有管理者能修改
     match /access/{email} {
       allow read: if (signedInEmail() && request.auth.token.email.lower() == email) || isAdmin();
@@ -75,6 +75,27 @@ service cloud.firestore {
     match /courseVideos/{courseId} {
       allow read: if isAdmin()
         || (signedInEmail() && ((isFreeCourse(courseId) && hasJoined(courseId)) || isGranted(courseId)));
+      allow write: if isAdmin();
+    }
+
+    // notes/{筆記id}：筆記目錄（標題、介紹、價格、封面）；任何人都能讀，只有管理者能修改
+    match /notes/{noteId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // noteFiles/{筆記id} = { url: Google Drive 分享連結 }
+    // 管理者、已購買的學生（access/{Email} 的 notes）、免費筆記的登入者讀得到；只有管理者能修改
+    function isFreeNote(noteId) {
+      let n = /databases/$(database)/documents/notes/$(noteId);
+      return exists(n) && get(n).data.get('published', true) != false && get(n).data.get('price', 1) == 0;
+    }
+    function ownsNote(noteId) {
+      let me = /databases/$(database)/documents/access/$(request.auth.token.email.lower());
+      return exists(me) && noteId in get(me).data.get('notes', []);
+    }
+    match /noteFiles/{noteId} {
+      allow read: if isAdmin() || (signedInEmail() && (isFreeNote(noteId) || ownsNote(noteId)));
       allow write: if isAdmin();
     }
 
