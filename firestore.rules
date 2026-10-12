@@ -242,6 +242,15 @@ service cloud.firestore {
         && request.resource.data.order is list && request.resource.data.order.size() <= 300
         && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
     }
+    // islam_articles/{課程id}/lessons/{單元id} = { text, updatedAt }：文章單元的內容，跟影片一樣只有管理者、已加入該課程的學生讀得到
+    match /islam_articles/{courseId}/lessons/{lessonId} {
+      allow read: if isIslamAdmin() || (signedInEmail() && islamCourseOpen(courseId)
+        && exists(/databases/$(database)/documents/islam_enroll/$(request.auth.token.email.lower())/courses/$(courseId)));
+      allow delete: if isIslamAdmin();
+      allow create, update: if isIslamAdmin() && request.resource.data.keys().hasOnly(['text', 'updatedAt'])
+        && request.resource.data.text is string && request.resource.data.text.size() <= 200000;
+    }
+
     // islam_courseVideos/{課程id}：管理者、已加入該課程的學生讀得到
     match /islam_courseVideos/{courseId} {
       allow read: if isIslamAdmin() || (signedInEmail() && islamCourseOpen(courseId)
