@@ -163,6 +163,13 @@ service cloud.firestore {
         && request.resource.data.courses is map && request.resource.data.courses.size() <= 300;
       allow delete: if isIslamAdmin();
     }
+    // islam_notes/{Email}/courses/{課程id} = { lessons: { 單元id: { text, updatedAt } }, updatedAt }：學生自己的上課筆記
+    match /islam_notes/{email}/courses/{courseId} {
+      allow read, delete: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow write: if signedInEmail() && request.auth.token.email.lower() == email
+        && request.resource.data.keys().hasOnly(['lessons', 'updatedAt'])
+        && request.resource.data.lessons is map && request.resource.data.lessons.size() <= 500;
+    }
     // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], updatedAt }
     // 學生自己在「我的學習區」排的順序與資料夾
     match /islam_prefs/{email} {
