@@ -117,6 +117,31 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- 循序漸進學伊斯蘭（islam.onepointzeroone.org）：共用帳號，所有課程免費 ----------
+    // islam_courses/{課程id}：課程目錄，任何人可讀；只有管理者能修改
+    match /islam_courses/{courseId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    function islamCourseOpen(courseId) {
+      let c = /databases/$(database)/documents/islam_courses/$(courseId);
+      return exists(c) && get(c).data.get('published', true) != false;
+    }
+    // islam_enroll/{Email}/courses/{課程id}：學生自己加入的課程（只能加入已上架的課程）
+    match /islam_enroll/{email}/courses/{courseId} {
+      allow read: if (signedInEmail() && request.auth.token.email.lower() == email) || isAdmin();
+      allow create: if signedInEmail() && request.auth.token.email.lower() == email
+        && islamCourseOpen(courseId)
+        && request.resource.data.keys().hasOnly(['joinedAt']);
+      allow delete: if isAdmin();
+    }
+    // islam_courseVideos/{課程id}：管理者、已加入該課程的學生讀得到
+    match /islam_courseVideos/{courseId} {
+      allow read: if isAdmin() || (signedInEmail() && islamCourseOpen(courseId)
+        && exists(/databases/$(database)/documents/islam_enroll/$(request.auth.token.email.lower())/courses/$(courseId)));
+      allow write: if isAdmin();
+    }
+
     // 其他資料一律禁止
     match /{document=**} {
       allow read, write: if false;
