@@ -15,6 +15,7 @@ let user = null;         // 目前登入的 Firebase 使用者
 let access = [];         // 已開通的課程 id
 let accessExp = {};      // 課程 id → 觀看期限（毫秒）；沒有 = 不限期限
 let joined = [];         // 已加入的免費課程 id（從課程頁按「加入課程」）
+let myOrder = [];        // 學生自己在「我的課程」拖曳排好的順序（prefs/{Email}.order）
 let notes = [];          // 筆記目錄（notes 集合）
 let ownedNotes = [];     // 已購買的筆記 id（access/{Email} 的 notes）
 let accessReady = Promise.resolve();
@@ -158,6 +159,7 @@ async function loadAccess() {
   accessExp = {};
   joined = [];
   ownedNotes = [];
+  myOrder = [];
   if (!isVerified()) return;
   const email = user.email.toLowerCase();
   await Promise.all([
@@ -169,8 +171,26 @@ async function loadAccess() {
     // enroll/{Email}/courses/{課程id}：學生自己加入的免費課程
     fb.getDocs(fb.collection(db, 'enroll', email, 'courses')).then((snap) => {
       joined = snap.docs.map((d) => d.id);
+    }).catch((e) => console.error(e)),
+    fb.getDoc(fb.doc(db, 'prefs', email)).then((snap) => {
+      myOrder = snap.exists() ? (snap.data().order || []) : [];
     }).catch((e) => console.error(e))
   ]);
+}
+
+// 我的課程：依學生自己排的順序，沒排過的放後面
+function sortMine(list) {
+  const rank = (c) => { const i = myOrder.indexOf(c.id); return i === -1 ? 1e6 + list.indexOf(c) : i; };
+  return list.slice().sort((a, b) => rank(a) - rank(b));
+}
+async function saveOrder(ids) {
+  myOrder = ids;
+  await fb.setDoc(fb.doc(db, 'prefs', user.email.toLowerCase()), { order: ids, updatedAt: Date.now() });
+}
+// 把免費課程移出「我的課程」（付費課程不能移出；學習進度保留在瀏覽器）
+async function leaveCourse(c) {
+  await fb.deleteDoc(fb.doc(db, 'enroll', user.email.toLowerCase(), 'courses', c.id));
+  joined = joined.filter((id) => id !== c.id);
 }
 
 // 加入免費課程（每門課分開加入）
@@ -596,23 +616,106 @@ pages.my = (app) => {
   if (!user) return go('/login?next=/my');
   if (!isVerified()) return pages.verify(app);
   // 已開通的課程 + 已加入的免費課程 + 已到期的課程（可重新購買）
-  const list = visibleCourses().filter((c) => access.includes(c.id) || hasJoined(c.id) || isAdmin());
-  app.innerHTML = '<div class="container"><h1>我的課程</h1>' + (list.length
-    ? '<div class="grid">' + list.map((c) => {
-        const p = progress(c);
-        if (!owns(c.id)) {
-          return `<a class="card course" href="#/course/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
-            (expired(c.id)
-              ? `<p class="expired small">觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期</p><p class="muted small">點這裡重新購買</p>`
-              : '<p class="expired small">限時免費已結束</p><p class="muted small">點這裡查看購買方式</p>') + '</div></a>';
-        }
-        return `<a class="card course" href="#/learn/${c.id}">${thumb(c)}<div class="pad"><h3>${esc(c.title)}</h3>` +
-          `<div class="bar"><i style="width:${p}%"></i></div><p class="muted small">已完成 ${p}%` +
-          (granted(c.id) && expiryOf(c.id) ? ` · 觀看期限至 ${fmtTime(expiryOf(c.id))}` : '') + '</p></div></a>';
+  const list = sortMine(visibleCourses().filter((c) => access.includes(c.id) || hasJoined(c.id) || isAdmin()));
+  app.innerHTML = '<div class="container"><div class="row-between"><h1>我的課程</h1>' +
+    '<a class="btn btn-ghost btn-sm" href="#/">＋ 瀏覽更多課程</a></div>' + (list.length
+    ? '<input class="input my-search" id="myq" type="search" placeholder="搜尋我的課程…" aria-label="搜尋我的課程" autocomplete="off"/>' +
+        '<p class="muted small" id="myhint">按住 ⠿ 拖曳，或按 ↑ ↓ 調整順序，排成你想要的學習順序；順序會自動儲存，換裝置登入也會保留。</p>' +
+        '<p class="muted" id="mynone" hidden>找不到符合的課程。</p>' +
+      '<div class="path my-list" id="mine">' + list.map((c) => {
+        const p = progress(c), ok = owns(c.id);
+        const href = ok ? `#/learn/${c.id}` : `#/course/${c.id}`;
+        const status = ok
+          ? `<div class="bar"><i style="width:${p}%"></i></div><p class="small owned">${p === 100 ? '✓ 已完成' : `進度 ${p}%`}` +
+            (granted(c.id) && expiryOf(c.id) ? `<span class="muted"> · 觀看期限至 ${fmtTime(expiryOf(c.id))}</span>` : '') + '</p>'
+          : (expired(c.id)
+            ? `<p class="expired small">觀看期限已於 ${fmtTime(expiryOf(c.id))} 到期</p><p class="muted small">點這裡重新購買</p>`
+            : '<p class="expired small">限時免費已結束</p><p class="muted small">點這裡查看購買方式</p>');
+        // 只有自己加入的免費課程可以移出（付費開通的課程不行）
+        const canLeave = hasJoined(c.id) && !access.includes(c.id);
+        const hay = [c.title, c.subtitle, c.category, c.level, c.instructor, ...lessonsOf(c).map((l) => l.title)].join(' ').toLowerCase();
+          return `<div class="card step my-card" data-id="${esc(c.id)}" data-q="${esc(hay)}">` +
+          '<div class="my-tools"><span class="drag-handle" title="拖曳調整順序" aria-label="拖曳調整順序">⠿</span>' +
+          '<button type="button" class="icon-btn" data-move="-1" aria-label="往上移" title="往上移">↑</button>' +
+          '<button type="button" class="icon-btn" data-move="1" aria-label="往下移" title="往下移">↓</button></div>' +
+          `<a href="${href}" draggable="false">${thumb(c)}</a><div class="step-body">` +
+          `<span class="tag">${[c.category, c.level].filter(Boolean).map(esc).join(' · ')}</span>` +
+          `<h3><a href="${href}" draggable="false">${esc(c.title)}</a></h3>` +
+          `<p class="muted small">${esc(c.instructor || '')}${minutesText(c)}</p>` + status + '</div>' +
+          (canLeave ? '<button type="button" class="icon-btn my-leave" data-leave aria-label="移出我的課程" title="移出我的課程">✕</button>' : '<span></span>') +
+          '</div>';
       }).join('') + '</div>'
     : '<div class="card pad"><p>目前還沒有開通的課程。</p>' +
       `<p class="muted small">免費課程請到課程頁按「免費加入課程」；付費課程會用你的登入 Email（<strong>${esc(user.email)}</strong>）開通。</p>` +
       '<a href="#/" class="btn btn-sm">瀏覽課程</a></div>') + myNotes() + '</div>';
+
+  const grid = app.querySelector('#mine');
+  if (!grid) return;
+  // 搜尋：只顯示符合的課程；搜尋時先隱藏排序按鈕，清除搜尋後才能調整順序
+  const hint = app.querySelector('#myhint'), none = app.querySelector('#mynone');
+  const hintText = hint.textContent;
+  app.querySelector('#myq').oninput = (e) => {
+    const words = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    [...grid.children].forEach((card) => {
+      const ok = words.every((w) => card.dataset.q.includes(w));
+      card.hidden = !ok;
+      if (ok) shown++;
+    });
+    grid.classList.toggle('filtering', words.length > 0);
+    none.hidden = shown > 0;
+    hint.textContent = words.length ? '搜尋中無法調整順序，清除搜尋後就能拖曳或按 ↑ ↓。' : hintText;
+  };
+  let saving = Promise.resolve();
+  const persist = () => {
+    const ids = [...grid.children].map((el) => el.dataset.id);
+    saving = saving.then(() => saveOrder(ids)).catch((err) => toast('順序儲存失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'));
+  };
+  // ↑ ↓、移出
+  grid.onclick = async (e) => {
+    const card = e.target.closest('.my-card');
+    if (!card) return;
+    const mv = e.target.closest('[data-move]');
+    if (mv) {
+      const sib = mv.dataset.move === '-1' ? card.previousElementSibling : card.nextElementSibling;
+      if (!sib) return;
+      if (mv.dataset.move === '-1') grid.insertBefore(card, sib); else grid.insertBefore(sib, card);
+      persist();
+      return;
+    }
+    if (e.target.closest('[data-leave]')) {
+      const c = findCourse(card.dataset.id);
+      if (!confirm(`把「${c.title}」移出我的課程？（之後可以在課程頁再加入，學習進度會保留）`)) return;
+      try { await leaveCourse(c); card.remove(); persist(); toast('已移出'); if (!grid.children.length) pages.my(app); }
+      catch (err) { toast('移出失敗：' + (err.code || err.message) + '（請確認已部署最新的 Firestore 規則）'); }
+    }
+  };
+  // 拖曳（滑鼠與觸控都可以）：按住 ⠿ 上下移動
+  let dragging = null;
+  grid.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    e.preventDefault();
+    dragging = h.closest('.my-card');
+    dragging.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+  });
+  grid.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    const target = over && over.closest('.my-card');
+    if (!target || target === dragging || target.parentNode !== grid) return;
+    const r = target.getBoundingClientRect();
+    grid.insertBefore(dragging, e.clientY > r.top + r.height / 2 ? target.nextSibling : target);
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    persist();
+  };
+  grid.addEventListener('pointerup', end);
+  grid.addEventListener('pointercancel', end);
 };
 
 // 我的課程頁下方：我的筆記（已購買的付費筆記；免費筆記在筆記區直接打開）

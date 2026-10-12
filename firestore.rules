@@ -67,7 +67,16 @@ service cloud.firestore {
       allow create: if signedInEmail() && request.auth.token.email.lower() == email
         && isFreeCourse(courseId)
         && request.resource.data.keys().hasOnly(['joinedAt']);
-      allow delete: if isAdmin();
+      // 學生可以把免費課程移出自己的「我的課程」
+      allow delete: if isAdmin() || (signedInEmail() && request.auth.token.email.lower() == email);
+    }
+
+    // prefs/{Email} = { order: [課程id…], updatedAt }：學生自己在「我的課程」排的順序
+    match /prefs/{email} {
+      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow write: if signedInEmail() && request.auth.token.email.lower() == email
+        && request.resource.data.keys().hasOnly(['order', 'updatedAt'])
+        && request.resource.data.order is list && request.resource.data.order.size() <= 300;
     }
 
     // courseVideos/{課程id} = { l1: 'YouTube 網址', l2: ... }
