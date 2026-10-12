@@ -4,6 +4,7 @@
  *              全額折價券（折扣後 0 元）直接開通
  * checkCoupon：學生輸入折扣碼時，回傳折扣後的價格
  * ecpayNotify：綠界付款完成後通知這裡（ReturnURL），驗證後自動開通課程
+ * islamLinkPreview：循序漸進學伊斯蘭的管理者貼上文章連結時，讀取標題、摘要、封面圖片（linkPreview.js）
  *
  * 設定（見 README.md）：
  *   functions/.env：ECPAY_ENV（stage = 測試、prod = 正式）、ECPAY_MERCHANT_ID、SITE_URL
@@ -15,6 +16,7 @@ const { setGlobalOptions, logger } = require('firebase-functions/v2');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const ecpay = require('./ecpay');
+const linkPreview = require('./linkPreview');
 
 initializeApp();
 const db = getFirestore();
@@ -262,5 +264,21 @@ exports.ecpayNotify = onRequest({ secrets: [ECPAY_HASH_KEY, ECPAY_HASH_IV], invo
   } catch (err) {
     logger.error('ECPay notify: 處理失敗', err);
     res.status(500).send('0|Error'); // 綠界會稍後重送
+  }
+});
+
+// 循序漸進學伊斯蘭：讀取文章連結的標題、摘要、封面圖片（只有伊斯蘭網站的管理者能用）
+exports.islamLinkPreview = onCall({ memory: '512MiB', timeoutSeconds: 30 }, async (req) => {
+  const email = String((req.auth && req.auth.token.email) || '').toLowerCase();
+  if (!req.auth || !req.auth.token.email_verified || !linkPreview.ISLAM_ADMINS.includes(email)) {
+    throw new HttpsError('permission-denied', '只有管理者可以使用');
+  }
+  const url = String((req.data && req.data.url) || '').trim();
+  if (!url || url.length > 2000) throw new HttpsError('invalid-argument', '請貼上文章網址');
+  try {
+    return await linkPreview.preview(url);
+  } catch (e) {
+    logger.warn('islamLinkPreview', url, e.message);
+    throw new HttpsError('failed-precondition', e.message || '無法讀取這個網址');
   }
 });
