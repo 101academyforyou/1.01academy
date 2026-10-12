@@ -233,14 +233,15 @@ service cloud.firestore {
       allow delete: if isIslamAdmin() || (signedInEmail() && resource.data.uid == request.auth.uid);
     }
 
-    // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], updatedAt }
+    // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], schedules: { 課程id: { days, time, minutes, start, until } }, updatedAt }
     // 學生自己在「我的學習區」排的順序與資料夾
     match /islam_prefs/{email} {
       allow read: if signedInEmail() && request.auth.token.email.lower() == email;
       allow write: if signedInEmail() && request.auth.token.email.lower() == email
-        && request.resource.data.keys().hasOnly(['order', 'folders', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['order', 'folders', 'schedules', 'updatedAt'])
         && request.resource.data.order is list && request.resource.data.order.size() <= 300
-        && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
+        && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30
+        && request.resource.data.get('schedules', {}) is map && request.resource.data.get('schedules', {}).size() <= 300;
     }
     // islam_events/{活動id} = { title, type, start, end, allDay, startTime, endTime, city, location, url, courseId, description, repeat, repeatUntil, published, createdAt, updatedAt }
     // repeat：''（不重複）、daily、weekly、biweekly、monthly；repeatUntil：重複到哪一天（可留空）
