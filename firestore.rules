@@ -140,7 +140,15 @@ service cloud.firestore {
       allow create: if signedInEmail() && request.auth.token.email.lower() == email
         && islamCourseOpen(courseId)
         && request.resource.data.keys().hasOnly(['joinedAt']);
-      allow delete: if isIslamAdmin();
+      // 學生可以把課程移出自己的學習區
+      allow delete: if isIslamAdmin() || (signedInEmail() && request.auth.token.email.lower() == email);
+    }
+    // islam_prefs/{Email} = { order: [課程id…], updatedAt }：學生自己在「我的學習區」排的順序
+    match /islam_prefs/{email} {
+      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow write: if signedInEmail() && request.auth.token.email.lower() == email
+        && request.resource.data.keys().hasOnly(['order', 'updatedAt'])
+        && request.resource.data.order is list && request.resource.data.order.size() <= 300;
     }
     // islam_courseVideos/{課程id}：管理者、已加入該課程的學生讀得到
     match /islam_courseVideos/{courseId} {
