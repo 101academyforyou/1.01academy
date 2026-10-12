@@ -242,6 +242,17 @@ service cloud.firestore {
         && request.resource.data.order is list && request.resource.data.order.size() <= 300
         && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
     }
+    // islam_blog/{文章id} = { title, summary, category, cover, url, text, published, createdAt, updatedAt }：獨立的文章（不屬於任何課程）
+    // 已發布的文章任何人都看得到（不用登入）；草稿只有管理者看得到；只有管理者能新增、修改、刪除
+    match /islam_blog/{postId} {
+      allow read: if resource.data.published == true || isIslamAdmin();
+      allow delete: if isIslamAdmin();
+      allow create, update: if isIslamAdmin()
+        && request.resource.data.keys().hasOnly(['title', 'summary', 'category', 'cover', 'url', 'text', 'published', 'createdAt', 'updatedAt'])
+        && request.resource.data.title is string && request.resource.data.title.size() > 0
+        && request.resource.data.published is bool;
+    }
+
     // islam_articles/{課程id}/lessons/{單元id} = { text, url, updatedAt }：文章單元的內容（文字和／或外部文章連結），跟影片一樣只有管理者、已加入該課程的學生讀得到
     match /islam_articles/{courseId}/lessons/{lessonId} {
       allow read: if isIslamAdmin() || (signedInEmail() && islamCourseOpen(courseId)
