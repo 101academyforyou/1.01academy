@@ -187,6 +187,24 @@ service cloud.firestore {
       allow create: if signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == 1 && islamFirstJoin(courseId);
       allow update: if signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == resource.data.n + 1 && islamFirstJoin(courseId);
     }
+    // islam_stats/learners = { n }：全站加入學習的累計人數（每人只算一次），任何人可讀
+    // 學生第一次加入任何課程時，和 islam_counted/{Email} 在同一個批次寫入，只能 +1；管理者可以直接校正
+    function islamLearnerPath() {
+      return /databases/$(database)/documents/islam_counted/$(request.auth.token.email.lower());
+    }
+    match /islam_stats/{id} {
+      allow read: if true;
+      allow write: if isIslamAdmin() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n is int;
+      allow create: if id == 'learners' && signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == 1
+        && !exists(islamLearnerPath()) && existsAfter(islamLearnerPath());
+      allow update: if id == 'learners' && signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == resource.data.n + 1
+        && !exists(islamLearnerPath()) && existsAfter(islamLearnerPath());
+    }
+    // islam_counted/{Email} = { at }：這位學生已經算進全站人數（不能修改、刪除）
+    match /islam_counted/{email} {
+      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow create: if signedInEmail() && request.auth.token.email.lower() == email && request.resource.data.keys().hasOnly(['at']);
+    }
     // islam_counted/{Email}/courses/{課程id} = { at }：這位學生已經算進人數（不能修改、刪除）
     match /islam_counted/{email}/courses/{courseId} {
       allow read: if signedInEmail() && request.auth.token.email.lower() == email;
