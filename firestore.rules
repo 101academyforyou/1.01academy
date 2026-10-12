@@ -195,7 +195,7 @@ service cloud.firestore {
     }
 
     // islam_posts/{課程id}/posts/{留言id} = { uid, name, text, createdAt, replyTo, admin }：每門課的心得分享與交流區
-    // 登入的人都看得到；加入這門課的學生（或管理者）才能發言；作者可以修改、刪除自己的留言，管理者可以刪除任何留言
+    // 登入的人都看得到；加入這門課的學生（或管理者）才能發言；作者可以修改（內容、名稱）、刪除自己的留言，管理者可以刪除任何留言
     match /islam_posts/{courseId}/posts/{postId} {
       allow read: if signedInEmail();
       allow create: if signedInEmail()
@@ -209,8 +209,9 @@ service cloud.firestore {
         && request.resource.data.replyTo is string && request.resource.data.replyTo.size() <= 40
         && request.resource.data.admin == isIslamAdmin();
       allow update: if signedInEmail() && resource.data.uid == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])
-        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000;
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt', 'name'])
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40;
       allow delete: if isIslamAdmin() || (signedInEmail() && resource.data.uid == request.auth.uid);
     }
 
