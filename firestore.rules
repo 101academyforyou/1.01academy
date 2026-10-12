@@ -131,7 +131,7 @@ service cloud.firestore {
     // 這份名單的人只能編輯 islam_ 開頭的資料，碰不到 1.01 Academy 的課程、學生、訂單、折扣碼
     function isIslamAdmin() {
       return isAdmin()
-        || (signedInEmail() && request.auth.token.email.lower() in ['1.01academyforyou@gmail.com']);
+        || (signedInEmail() && request.auth.token.email.lower() in ['1.01academyforyou@gmail.com', 'nadiamai@gmail.com', 'colorful6dorie@gmail.com']);
     }
 
     // islam_courses/{課程id}：課程目錄，任何人可讀；只有管理者能修改

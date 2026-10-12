@@ -6,7 +6,7 @@
 const dns = require('dns').promises;
 const net = require('net');
 
-const ISLAM_ADMINS = ['salimachchang@gmail.com', '1.01academyforyou@gmail.com'];
+const ISLAM_ADMINS = ['salimachchang@gmail.com', '1.01academyforyou@gmail.com', 'nadiamai@gmail.com', 'colorful6dorie@gmail.com'];
 const MAX_HTML = 3 * 1024 * 1024;
 const MAX_IMAGE = 4 * 1024 * 1024;
 const TIMEOUT = 10000;
