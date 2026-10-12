@@ -242,6 +242,18 @@ service cloud.firestore {
         && request.resource.data.order is list && request.resource.data.order.size() <= 300
         && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
     }
+    // islam_events/{活動id} = { title, type, start, end, allDay, startTime, endTime, location, url, courseId, description, published, createdAt, updatedAt }
+    // 行事曆上的課程與活動：已發布的任何人都看得到（不用登入）；只有管理者能新增、修改、刪除
+    match /islam_events/{eventId} {
+      allow read: if resource.data.published == true || isIslamAdmin();
+      allow delete: if isIslamAdmin();
+      allow create, update: if isIslamAdmin()
+        && request.resource.data.keys().hasOnly(['title', 'type', 'start', 'end', 'allDay', 'startTime', 'endTime', 'location', 'url', 'courseId', 'description', 'published', 'createdAt', 'updatedAt'])
+        && request.resource.data.title is string && request.resource.data.title.size() > 0
+        && request.resource.data.start is string && request.resource.data.start.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.published is bool;
+    }
+
     // islam_media/{圖片id} = { data, type, createdAt }：課程介紹、文章裡上傳的圖片／GIF（data URL，每張不到 1MB），任何人可讀，只有管理者能上傳、刪除
     match /islam_media/{mediaId} {
       allow read: if true;
