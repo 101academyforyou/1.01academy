@@ -163,12 +163,14 @@ service cloud.firestore {
         && request.resource.data.courses is map && request.resource.data.courses.size() <= 300;
       allow delete: if isIslamAdmin();
     }
-    // islam_prefs/{Email} = { order: [課程id…], updatedAt }：學生自己在「我的學習區」排的順序
+    // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], updatedAt }
+    // 學生自己在「我的學習區」排的順序與資料夾
     match /islam_prefs/{email} {
       allow read: if signedInEmail() && request.auth.token.email.lower() == email;
       allow write: if signedInEmail() && request.auth.token.email.lower() == email
-        && request.resource.data.keys().hasOnly(['order', 'updatedAt'])
-        && request.resource.data.order is list && request.resource.data.order.size() <= 300;
+        && request.resource.data.keys().hasOnly(['order', 'folders', 'updatedAt'])
+        && request.resource.data.order is list && request.resource.data.order.size() <= 300
+        && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
     }
     // islam_courseVideos/{課程id}：管理者、已加入該課程的學生讀得到
     match /islam_courseVideos/{courseId} {
