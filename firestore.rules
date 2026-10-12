@@ -170,6 +170,51 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['lessons', 'updatedAt'])
         && request.resource.data.lessons is map && request.resource.data.lessons.size() <= 500;
     }
+    // islam_counts/{課程id} = { n }：加入學習的累計人數，任何人可讀（移出學習區不會減少）
+    // 每位學生每門課只算一次：加入時和 islam_enroll、islam_counted 在同一個批次寫入，只能 +1；管理者可以直接校正
+    function islamEnrollPath(courseId) {
+      return /databases/$(database)/documents/islam_enroll/$(request.auth.token.email.lower())/courses/$(courseId);
+    }
+    function islamCountedPath(courseId) {
+      return /databases/$(database)/documents/islam_counted/$(request.auth.token.email.lower())/courses/$(courseId);
+    }
+    function islamFirstJoin(courseId) {
+      return !exists(islamCountedPath(courseId)) && existsAfter(islamCountedPath(courseId)) && existsAfter(islamEnrollPath(courseId));
+    }
+    match /islam_counts/{courseId} {
+      allow read: if true;
+      allow write: if isIslamAdmin() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n is int;
+      allow create: if signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == 1 && islamFirstJoin(courseId);
+      allow update: if signedInEmail() && request.resource.data.keys().hasOnly(['n']) && request.resource.data.n == resource.data.n + 1 && islamFirstJoin(courseId);
+    }
+    // islam_counted/{Email}/courses/{課程id} = { at }：這位學生已經算進人數（不能修改、刪除）
+    match /islam_counted/{email}/courses/{courseId} {
+      allow read: if signedInEmail() && request.auth.token.email.lower() == email;
+      allow create: if signedInEmail() && request.auth.token.email.lower() == email
+        && request.resource.data.keys().hasOnly(['at']) && existsAfter(islamEnrollPath(courseId));
+    }
+
+    // islam_posts/{課程id}/posts/{留言id} = { uid, name, text, createdAt, replyTo, admin }：每門課的心得分享與交流區
+    // 登入的人都看得到；加入這門課的學生（或管理者）才能發言；作者可以修改（內容、名稱）、刪除自己的留言，管理者可以刪除任何留言
+    match /islam_posts/{courseId}/posts/{postId} {
+      allow read: if signedInEmail();
+      allow create: if signedInEmail()
+        && (isIslamAdmin() || (islamCourseOpen(courseId)
+          && exists(/databases/$(database)/documents/islam_enroll/$(request.auth.token.email.lower())/courses/$(courseId))))
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'text', 'createdAt', 'replyTo', 'admin'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+        && request.resource.data.createdAt is number
+        && request.resource.data.replyTo is string && request.resource.data.replyTo.size() <= 40
+        && request.resource.data.admin == isIslamAdmin();
+      allow update: if signedInEmail() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt', 'name'])
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40;
+      allow delete: if isIslamAdmin() || (signedInEmail() && resource.data.uid == request.auth.uid);
+    }
+
     // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], updatedAt }
     // 學生自己在「我的學習區」排的順序與資料夾
     match /islam_prefs/{email} {
