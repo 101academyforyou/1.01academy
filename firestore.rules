@@ -170,6 +170,26 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['lessons', 'updatedAt'])
         && request.resource.data.lessons is map && request.resource.data.lessons.size() <= 500;
     }
+    // islam_posts/{課程id}/posts/{留言id} = { uid, name, text, createdAt, replyTo, admin }：每門課的心得分享與交流區
+    // 登入的人都看得到；加入這門課的學生（或管理者）才能發言；作者可以修改、刪除自己的留言，管理者可以刪除任何留言
+    match /islam_posts/{courseId}/posts/{postId} {
+      allow read: if signedInEmail();
+      allow create: if signedInEmail()
+        && (isIslamAdmin() || (islamCourseOpen(courseId)
+          && exists(/databases/$(database)/documents/islam_enroll/$(request.auth.token.email.lower())/courses/$(courseId))))
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'text', 'createdAt', 'replyTo', 'admin'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() <= 40
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+        && request.resource.data.createdAt is number
+        && request.resource.data.replyTo is string && request.resource.data.replyTo.size() <= 40
+        && request.resource.data.admin == isIslamAdmin();
+      allow update: if signedInEmail() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000;
+      allow delete: if isIslamAdmin() || (signedInEmail() && resource.data.uid == request.auth.uid);
+    }
+
     // islam_prefs/{Email} = { order: [課程id…], folders: [{ id, name, courses: [課程id…] }], updatedAt }
     // 學生自己在「我的學習區」排的順序與資料夾
     match /islam_prefs/{email} {
