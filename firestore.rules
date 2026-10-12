@@ -242,6 +242,15 @@ service cloud.firestore {
         && request.resource.data.order is list && request.resource.data.order.size() <= 300
         && request.resource.data.get('folders', []) is list && request.resource.data.get('folders', []).size() <= 30;
     }
+    // islam_media/{圖片id} = { data, type, createdAt }：課程介紹、文章裡上傳的圖片／GIF（data URL，每張不到 1MB），任何人可讀，只有管理者能上傳、刪除
+    match /islam_media/{mediaId} {
+      allow read: if true;
+      allow delete: if isIslamAdmin();
+      allow create: if isIslamAdmin() && request.resource.data.keys().hasOnly(['data', 'type', 'createdAt'])
+        && request.resource.data.data is string && request.resource.data.data.size() < 1000000
+        && request.resource.data.type in ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    }
+
     // islam_blog/{文章id} = { title, summary, category, cover, url, text, published, createdAt, updatedAt }：獨立的文章（不屬於任何課程）
     // 已發布的文章任何人都看得到（不用登入）；草稿只有管理者看得到；只有管理者能新增、修改、刪除
     match /islam_blog/{postId} {
