@@ -139,6 +139,13 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isIslamAdmin();
     }
+    // islam_meta/map = { sections: [{ id, name }], updatedAt }：學習地圖的分類資料夾（管理者自訂），任何人可讀
+    match /islam_meta/{id} {
+      allow read: if true;
+      allow write: if isIslamAdmin() && id == 'map'
+        && request.resource.data.keys().hasOnly(['sections', 'updatedAt'])
+        && request.resource.data.sections is list && request.resource.data.sections.size() <= 100;
+    }
     function islamCourseOpen(courseId) {
       let c = /databases/$(database)/documents/islam_courses/$(courseId);
       return exists(c) && get(c).data.get('published', true) != false;
